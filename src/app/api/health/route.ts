@@ -1,4 +1,4 @@
-import { db } from "@/server/db";
+import { getDb } from "@/server/db";
 
 /**
  * 健康檢查（infra.md）：app + db 狀態
@@ -7,7 +7,7 @@ import { db } from "@/server/db";
 export async function GET() {
   let dbOk = true;
   try {
-    await db.$queryRaw`SELECT 1`;
+    await getDb().$queryRaw`SELECT 1`;
   } catch {
     dbOk = false;
   }

@@ -1,6 +1,6 @@
 import { initTRPC, TRPCError } from "@trpc/server";
 import type { Session } from "next-auth";
-import { db } from "@/server/db";
+import { getDb } from "@/server/db";
 
 /**
  * tRPC 初始化（依 .claude/CLAUDE.backend.md 分層）
@@ -9,7 +9,7 @@ import { db } from "@/server/db";
 export async function createTRPCContext(opts: { headers: Headers }) {
   // TODO(auth task): 從 Auth.js 讀取 session 取代 null
   const session = null as Session | null;
-  return { db, headers: opts.headers, session };
+  return { db: getDb(), headers: opts.headers, session };
 }
 
 const t = initTRPC.context<typeof createTRPCContext>().create();

@@ -16,12 +16,7 @@ services:
     depends_on:
       db:
         condition: service_healthy
-    healthcheck:
-      test: ["CMD", "wget", "-qO-", "http://localhost:3000/api/health"]
-      interval: 30s
-      timeout: 5s
-      start_period: 15s
-      retries: 3
+    # healthcheck 由 Dockerfile 提供（compose 不重複覆寫）
 
   db:
     image: postgres:16-alpine

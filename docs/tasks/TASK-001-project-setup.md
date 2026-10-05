@@ -1,4 +1,4 @@
-STATUS: [ ] todo  [x] in-progress  [ ] review  [ ] done
+STATUS: [ ] todo  [ ] in-progress  [ ] review  [x] done
 
 # TASK-001: 專案初始化
 
@@ -37,15 +37,15 @@ PostgreSQL 16 + Auth.js v5 + Shadcn UI，以及 Docker 基礎設施，
 
 ## 驗收標準 (Acceptance Criteria)
 
-- [ ] `npm run lint` 通過
-- [ ] `npm run typecheck` 通過
-- [ ] `npm run build` 通過
-- [ ] `npx prisma validate` 通過
-- [ ] `npx prisma migrate dev` 成功（初始 migration + pg_trgm/GIN migration）
-- [ ] `/api/health` 回傳 ok
-- [ ] `docker compose config` 驗證通過
-- [ ] `.env` 未進版控、`.env.example` 欄位完整
-- [ ] 專案在 Node 22（nvm 預設切換後）可正常 dev / build
+- [x] `npm run lint` 通過
+- [x] `npm run typecheck` 通過
+- [x] `npm run build` 通過
+- [x] `npx prisma validate` 通過
+- [x] `npx prisma migrate dev` 成功（初始 migration + pg_trgm/GIN migration）
+- [x] `/api/health` 回傳 ok（host dev + Docker 容器均驗證）
+- [x] `docker compose config` 驗證通過
+- [x] `.env` 未進版控、`.env.example` 欄位完整
+- [x] 專案在 Node 22（nvm 預設切換後）可正常 dev / build
 
 ## 技術方案 (Approach)
 
