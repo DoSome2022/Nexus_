@@ -1,0 +1,125 @@
+// Nexus 資料模型 — 依 .claude/CLAUDE.data-model.md
+// Prisma 7 stable（規格鎖 6 已 EOL；generator 用新 prisma-client + 指定 output）
+
+generator client {
+  provider = "prisma-client"
+  output   = "../src/generated/prisma"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+enum Role {
+  ADMIN
+  USER
+}
+
+model User {
+  id                  String               @id @default(cuid())
+  email               String               @unique
+  passwordHash        String
+  name                String?
+  role                Role                 @default(USER)
+  createdAt           DateTime             @default(now())
+  updatedAt           DateTime             @updatedAt
+  deletedAt           DateTime?
+  records             Record[]
+  operationLogs       OperationLog[]
+  changeLogs          ChangeLog[]
+  passwordResetTokens PasswordResetToken[]
+  deletionRequests    DeletionRequest[]
+
+  @@index([deletedAt])
+}
+
+model Record {
+  id                 String    @id @default(cuid())
+  authorId           String
+  author             User      @relation(fields: [authorId], references: [id])
+  title              String
+  schema             Json // 欄位定義
+  data               Json // 實際內容
+  isPublic           Boolean   @default(false)
+  isEditableByOthers Boolean   @default(false)
+  deletedAt          DateTime? // 軟刪除
+  createdAt          DateTime  @default(now())
+  updatedAt          DateTime  @updatedAt
+
+  relationsFrom    RecordRelation[]  @relation("from")
+  relationsTo      RecordRelation[]  @relation("to")
+  deletionRequests DeletionRequest[]
+
+  @@index([authorId])
+  @@index([deletedAt])
+}
+
+model RecordRelation {
+  id        String   @id @default(cuid())
+  fromId    String
+  toId      String
+  from      Record   @relation("from", fields: [fromId], references: [id])
+  to        Record   @relation("to", fields: [toId], references: [id])
+  label     String?
+  createdAt DateTime @default(now())
+
+  @@index([fromId])
+  @@index([toId])
+}
+
+model OperationLog {
+  id         String   @id @default(cuid())
+  actorId    String
+  actor      User     @relation(fields: [actorId], references: [id])
+  action     String // CREATE / UPDATE / DELETE / VIEW
+  targetType String
+  targetId   String
+  durationMs Int
+  ip         String?
+  userAgent  String?
+  createdAt  DateTime @default(now())
+
+  @@index([targetType, targetId])
+  @@index([actorId])
+  @@index([createdAt])
+}
+
+model ChangeLog {
+  id        String   @id @default(cuid())
+  targetId  String
+  field     String
+  oldValue  Json?
+  newValue  Json?
+  actorId   String
+  actor     User     @relation(fields: [actorId], references: [id])
+  createdAt DateTime @default(now())
+
+  @@index([targetId])
+}
+
+model PasswordResetToken {
+  id        String    @id @default(cuid())
+  userId    String
+  user      User      @relation(fields: [userId], references: [id])
+  tokenHash String    @unique
+  expiresAt DateTime
+  usedAt    DateTime?
+  createdAt DateTime  @default(now())
+
+  @@index([userId])
+}
+
+model DeletionRequest {
+  id          String    @id @default(cuid())
+  recordId    String
+  record      Record    @relation(fields: [recordId], references: [id])
+  requestedBy String
+  requester   User      @relation(fields: [requestedBy], references: [id])
+  tokenHash   String    @unique
+  approvedAt  DateTime?
+  expiresAt   DateTime
+  createdAt   DateTime  @default(now())
+
+  @@index([recordId])
+  @@index([requestedBy])
+}

@@ -1,0 +1,64 @@
+# Nexus — docker-compose（依 .claude/CLAUDE.infra.md）
+# 網路隔離：npm ↔ app（frontend）、app ↔ db（backend）、db 只在 backend
+
+services:
+  app:
+    build: .
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      # 容器內走 compose 網路，覆寫 .env 的 localhost
+      DATABASE_URL: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB}?schema=public
+      NODE_ENV: production
+    networks:
+      - frontend
+      - backend
+    depends_on:
+      db:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:3000/api/health"]
+      interval: 30s
+      timeout: 5s
+      start_period: 15s
+      retries: 3
+
+  db:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    env_file: .env
+    # 僅本機 loopback 供開發（prisma migrate dev 等）；5432 已被其他容器佔用故用 5434。
+    # db 不暴露到 public network（infra.md）
+    ports:
+      - "127.0.0.1:5434:5432"
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    networks:
+      - backend
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  npm:
+    image: jc21/nginx-proxy-manager:latest
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "81:81"
+      - "443:443"
+    volumes:
+      - npm-data:/data
+      - letsencrypt:/etc/letsencrypt
+    networks:
+      - frontend
+
+networks:
+  frontend: {}
+  backend: {}
+
+volumes:
+  postgres-data:
+  npm-data:
+  letsencrypt:
