@@ -37,6 +37,17 @@ src/server/
 - Migration 命名：`<timestamp>_<snake_case_desc>`
 - **正式環境用 `migrate deploy`，禁止 `db push`**
 
+## localdata 儲存層（保密資料，TASK-004）
+
+- 目錄：`LOCALDATA_DIR`（env，預設 `./localdata`），啟動時確保存在
+- 檔案：`localdata/<recordId>.json`（路徑僅由 cuid id + `basename()` 產生，禁止使用者輸入拼路徑）
+- 原子寫：寫 `.tmp` → `rename`；新檔 `flag: "wx"` 防覆寫
+- 寫入順序：先寫檔 → 再寫 DB metadata（data/schema 為 null）→ DB 失敗刪檔回滾
+- 讀取：isConfidential 且 data 為 null → 讀檔；遺失 → TRPCError `NOT_FOUND` + 結構化 log（不印內容/絕對路徑）
+- ChangeLog：保密資料寫入檔案 `changes` 陣列，DB ChangeLog 表不存內容
+- 軟刪除：檔案移入 `localdata/.trash/<id>.json`
+- 一律經 repository 封裝，禁止元件直接讀寫檔案
+
 ## Auth.js v5
 
 - Session：JWT 或 DB session（登出即失效需求 → DB）

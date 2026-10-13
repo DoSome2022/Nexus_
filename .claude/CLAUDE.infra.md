@@ -11,7 +11,7 @@
 
 ## docker-compose 服務
 
-- `app`：Next.js
+- `app`：Next.js（bind mount `./localdata:/app/localdata` 持久化保密資料）
 - `db`：PostgreSQL 16
 - `npm`：Nginx Proxy Manager
 
@@ -34,6 +34,7 @@
 - `.env` 不進映像
 - compose 用 `env_file`
 - 啟動時 `src/env.ts`（Zod）驗證
+- `LOCALDATA_DIR`：localdata 目錄（預設 `./localdata`，對應 app 容器 bind mount `/app/localdata`）
 
 ## Migration
 
@@ -53,6 +54,12 @@
 - `/api/health`：檢查 app
 - `pg_isready`：檢查 db
 - NPM 檢查 upstream
+
+## localdata 備份（TASK-004）
+
+- localdata 檔案不隨 DB backup，需獨立備份（rsync / tar 定期排程）
+- `.gitignore`、`.dockerignore` 排除 `localdata/`
+- 目錄由 app 啟動時自動建立（fresh clone 不需手動 mkdir）
 
 ## 禁止
 

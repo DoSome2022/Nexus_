@@ -40,6 +40,16 @@
 - 檔案上傳（若有）：限類型、限大小、掃毒
 - URL 欄位：驗證 scheme
 
+## 檔案儲存（localdata）安全（TASK-004）
+
+- Path traversal：檔名由 recordId（cuid）+ `basename()` 白名單，禁止使用者輸入拼路徑
+- 覆寫/競態：新檔 `flag: "wx"`；更新走 `.tmp` + `rename` 原子寫
+- 內容洩漏：ChangeLog old/new 不寫 DB；logger 不印 data 內容
+- 大小：Zod 上限（≤ 1MB）防資源耗盡
+- 檔案權限：0600（容器使用者 nextjs）
+- localdata 不入 git、不進 Docker image
+- 明文風險：保密 ≠ 加密；如需 at-rest 加密另開 Task
+
 ## Rate Limit
 
 - 登入：5/min/IP
