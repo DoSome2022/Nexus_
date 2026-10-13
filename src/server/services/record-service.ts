@@ -136,29 +136,38 @@ export async function createRecord(
   return { id };
 }
 
+/** searchRecords 的 raw query 回傳列（TASK-006） */
+interface SearchRow {
+  id: string;
+  title: string;
+  isPublic: boolean;
+  isEditableByOthers: boolean;
+  isConfidential: boolean;
+  authorId: string;
+  updatedAt: Date;
+}
+
 export async function searchRecords(
   q: string,
   actor: PermissionActor,
   limit: number,
 ): Promise<RecordListItemDTO[]> {
-  const rows = await getDb().record.findMany({
-    where: {
-      deletedAt: null,
-      title: { contains: q, mode: "insensitive" }, // pg_trgm GIN 加速
-      OR: [{ isPublic: true }, { authorId: actor.id }],
-    },
-    select: {
-      id: true,
-      title: true,
-      isPublic: true,
-      isEditableByOthers: true,
-      isConfidential: true,
-      authorId: true,
-      updatedAt: true,
-    },
-    orderBy: { updatedAt: "desc" },
-    take: limit,
-  });
+  // TASK-006：ILIKE（pg_trgm 模糊）OR tsquery（nexus_zh 近義詞）
+  // 排序：直接相符優先 → ts_rank 相關度 → updatedAt
+  // 全部參數化（$1 q、$2 actorId、$3 limit）；config 名 nexus_zh 為常數非輸入
+  const like = `%${q}%`;
+  const rows = await getDb().$queryRaw<SearchRow[]>`
+    SELECT id, title, "isPublic", "isEditableByOthers", "isConfidential", "authorId", "updatedAt"
+    FROM "Record"
+    WHERE "deletedAt" IS NULL
+      AND ("title" ILIKE ${like}
+           OR "searchVector" @@ plainto_tsquery('nexus_zh', ${q}))
+      AND ("isPublic" = true OR "authorId" = ${actor.id})
+    ORDER BY ("title" ILIKE ${like}) DESC,
+             ts_rank("searchVector", plainto_tsquery('nexus_zh', ${q})) DESC,
+             "updatedAt" DESC
+    LIMIT ${limit}
+  `;
   // 兜底：SQL 已過濾，此處再跑 canRead 純函式（防禦性，見 CLAUDE.security.md）
   return rows.filter((r) => canRead(r, actor)).map(toListItem);
 }

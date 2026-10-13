@@ -9,6 +9,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 const mocks = vi.hoisted(() => ({
   findMany: vi.fn(),
   findUnique: vi.fn(),
+  queryRaw: vi.fn(),
   recordCreate: vi.fn(),
   logCreate: vi.fn(),
   transaction: vi.fn(),
@@ -21,6 +22,7 @@ vi.mock("@/server/db", () => ({
     record: { findMany: mocks.findMany, findUnique: mocks.findUnique, create: mocks.recordCreate },
     operationLog: { create: mocks.logCreate },
     $transaction: mocks.transaction,
+    $queryRaw: mocks.queryRaw,
   }),
 }));
 
@@ -59,7 +61,7 @@ beforeEach(() => {
 
 describe("searchRecords 權限兜底", () => {
   it("他人私有/保密資料即使回傳也被剔除；自己的保密保留", async () => {
-    mocks.findMany.mockResolvedValue([
+    mocks.queryRaw.mockResolvedValue([
       row({ id: "1", title: "公開", isPublic: true }),
       row({ id: "2", title: "他人私有" }),
       row({ id: "3", title: "他人保密", isConfidential: true }),
@@ -71,7 +73,7 @@ describe("searchRecords 權限兜底", () => {
   });
 
   it("列表 DTO 不含 data 內容", async () => {
-    mocks.findMany.mockResolvedValue([row({ id: "1", isPublic: true })]);
+    mocks.queryRaw.mockResolvedValue([row({ id: "1", isPublic: true })]);
     const result = await searchRecords("x", actor, 50);
     expect(result[0]).not.toHaveProperty("data");
     expect(result[0]).not.toHaveProperty("schema");
