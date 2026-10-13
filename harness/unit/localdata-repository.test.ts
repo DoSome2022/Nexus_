@@ -10,6 +10,7 @@ import {
   moveToTrash,
   readRecordFile,
   recordFilePath,
+  removeRecordFile,
   updateRecordFile,
   type LocalRecordFile,
 } from "@/server/repositories/localdata-repository";
@@ -116,6 +117,22 @@ describe("更新", () => {
     await expect(updateRecordFile(makeFile("cktest0008"))).rejects.toThrow(
       LocaldataFileNotFoundError,
     );
+  });
+});
+
+describe("回滾刪除（TASK-003）", () => {
+  it("刪除存在的檔案", async () => {
+    await createRecordFile(makeFile("cktest0011"));
+    await removeRecordFile("cktest0011");
+    await expect(readRecordFile("cktest0011")).rejects.toThrow(LocaldataFileNotFoundError);
+  });
+
+  it("刪除不存在的檔案不拋錯（冪等）", async () => {
+    await expect(removeRecordFile("cktest0012")).resolves.toBeUndefined();
+  });
+
+  it("拒絕非法 id", async () => {
+    await expect(removeRecordFile("../etc")).rejects.toThrow(LocaldataInvalidIdError);
   });
 });
 
