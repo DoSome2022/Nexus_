@@ -17,6 +17,8 @@ harness/
     └── seed-test.sh
 ```
 
+測試報告記錄於 `docs/tests/<TASK-ID>-test.md`（每 Task 一份：範圍、結果、重現方式、已知限制）。
+
 ## 測試金字塔
 
 | 層 | 團隊模式 | 個人模式 |
