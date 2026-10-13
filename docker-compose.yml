@@ -10,6 +10,11 @@ services:
       # 容器內走 compose 網路，覆寫 .env 的 localhost
       DATABASE_URL: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB}?schema=public
       NODE_ENV: production
+      # 保密資料目錄，對應下方 bind mount（TASK-004）
+      LOCALDATA_DIR: /app/localdata
+    volumes:
+      # 保密資料持久化：宿主 ./localdata ↔ 容器 /app/localdata（TASK-004）
+      - ./localdata:/app/localdata
     networks:
       - frontend
       - backend

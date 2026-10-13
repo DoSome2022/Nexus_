@@ -38,6 +38,9 @@ yarn-error.log*
 postgres-data/
 letsencrypt/
 
+# localdata（保密資料檔案儲存，不入版控，TASK-004）
+/localdata/
+
 # vercel
 .vercel
 
