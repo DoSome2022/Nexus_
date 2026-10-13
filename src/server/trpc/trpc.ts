@@ -5,11 +5,10 @@ import { getDb } from "@/server/db";
 /**
  * tRPC 初始化（依 .claude/CLAUDE.backend.md 分層）
  * procedure 五步驟：Zod 驗證 → session 檢查 → 權限檢查 → service → DTO
+ * session 由 route handler 內 auth() 取得後傳入（避免 next/headers 在非 Request 上下文失效）
  */
-export async function createTRPCContext(opts: { headers: Headers }) {
-  // TODO(auth task): 從 Auth.js 讀取 session 取代 null
-  const session = null as Session | null;
-  return { db: getDb(), headers: opts.headers, session };
+export async function createTRPCContext(opts: { headers: Headers; session: Session | null }) {
+  return { db: getDb(), headers: opts.headers, session: opts.session };
 }
 
 const t = initTRPC.context<typeof createTRPCContext>().create();
