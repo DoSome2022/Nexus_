@@ -17,7 +17,7 @@
 | 層 | 檢查點 |
 |---|---|
 | 前端 | Console、Network、React DevTools、hydration |
-| Next.js | Server log、RSC 邊界、cache、revalidate |
+| Next.js | Server log、proxy（Next 16 取代 middleware）、RSC 邊界、cache、revalidate |
 | tRPC | Input 驗證、middleware、context、錯誤碼 |
 | Auth | Session、cookie、JWT 過期、CSRF、callback |
 | Prisma | Query log、N+1、transaction、migration 狀態 |

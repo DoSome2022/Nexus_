@@ -50,6 +50,13 @@
 - 跨頁：URL searchParams（搜尋條件優先走 URL）
 - 全域：避免；必要時 Zustand
 
+## 登入 UI（TASK-002）
+
+- /login 頁：React Hook Form + zodResolver，schema 在 `src/lib/schemas/login.ts`（前後端共用）
+- 登入失敗：統一錯誤訊息「帳號或密碼錯誤」，不區分帳號不存在/密碼錯
+- 登入後：`router.push(callbackUrl || "/")`
+- 登出：`signOut()` 清 cookie 後回 /login
+
 ## 搜尋 UI 專屬規則
 
 - 輸入 debounce 300ms

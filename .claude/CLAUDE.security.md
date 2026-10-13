@@ -19,7 +19,7 @@
 
 - 密碼：bcrypt cost ≥ 12 或 argon2id
 - 忘記密碼 token：一次性、≤ 15 分鐘、存 hash
-- Session：登出即失效用 DB session
+- Session：JWT（maxAge 7 天）+ 登出清 cookie（TASK-002 定案）；伺服器端即時撤銷需求 → 切 DB session
 - CSRF：Auth.js 內建 + tRPC POST
 - 登入失敗：不洩漏「帳號不存在 vs 密碼錯」
 

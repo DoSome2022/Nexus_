@@ -50,10 +50,13 @@ src/server/
 
 ## Auth.js v5
 
-- Session：JWT 或 DB session（登出即失效需求 → DB）
+- Session：**JWT**（credentials provider 搭配，TASK-002 定案）；含 id/email/role、maxAge 7 天，
+  登出清 cookie。DB session（可伺服器端即時撤銷）需 adapter + 3 張表，暫不採用，未來有需求再切
 - 密碼：bcrypt（cost ≥ 12）或 argon2
 - 忘記密碼：token 一次性、≤ 15 分鐘、存 hash
-- RBAC：`role: 'ADMIN' | 'USER'`，middleware 檢查
+- RBAC：`role: 'ADMIN' | 'USER'`，procedure 層檢查
+- 路由保護：Next 16 的 `src/proxy.ts`（middleware 已廢棄）做 redirect；
+  但 procedure 層檢查不可省（proxy 不能取代權限驗證）
 
 ## Audit Log（每個資料兩份）
 
