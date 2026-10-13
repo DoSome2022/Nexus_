@@ -12,6 +12,8 @@ const envSchema = z.object({
   AUTH_URL: z.string().url().optional(),
   AUTH_TRUST_HOST: z.string().default("true"),
   APP_URL: z.string().url(),
+  // 保密資料檔案儲存目錄（TASK-004）；容器內 bind mount 為 /app/localdata
+  LOCALDATA_DIR: z.string().default("./localdata"),
 });
 
 export type Env = z.infer<typeof envSchema>;
