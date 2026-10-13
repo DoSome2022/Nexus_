@@ -20,6 +20,7 @@ import {
   type LocalRecordFile,
 } from "@/server/repositories/localdata-repository";
 import { logger } from "@/server/lib/logger";
+import { listRelationsForRecord, type RelationDTO } from "@/server/services/relation-service";
 import type { CreateRecordInput, UpdateRecordInput } from "@/lib/schemas/record";
 
 /**
@@ -45,6 +46,8 @@ export interface RecordDetailDTO extends RecordListItemDTO {
   /** 依 actor 計算（TASK-005），UI 渲染按鈕用 */
   canEdit: boolean;
   canDelete: boolean;
+  /** 資料關聯（TASK-007；另一端不可讀者已過濾） */
+  relations: RelationDTO[];
 }
 
 function toListItem(r: {
@@ -217,6 +220,7 @@ export async function getRecord(id: string, actor: PermissionActor): Promise<Rec
     isEditableByOthers: record.isEditableByOthers,
     canEdit: canEdit(record, actor),
     canDelete: canDelete(record, actor),
+    relations: await listRelationsForRecord(record.id, actor),
   };
 }
 

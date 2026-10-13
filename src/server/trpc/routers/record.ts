@@ -1,6 +1,7 @@
 import { TRPCError } from "@trpc/server";
 import { z } from "zod";
 import { protectedProcedure, router } from "@/server/trpc/trpc";
+import { assertWriteAllowed } from "@/server/trpc/lib/assert-write-allowed";
 import { checkRateLimit } from "@/server/security/rate-limit";
 import {
   confirmDeleteSchema,
@@ -30,13 +31,6 @@ function actorFromCtx(ctx: { session: { user: { id: string; role: "ADMIN" | "USE
   const user = ctx.session?.user;
   if (!user) throw new TRPCError({ code: "UNAUTHORIZED" });
   return { id: user.id, role: user.role };
-}
-
-/** 寫入 rate limit：30/min/user（CLAUDE.security.md） */
-function assertWriteAllowed(actorId: string): void {
-  if (!checkRateLimit(`write:${actorId}`, { limit: 30, windowMs: 60_000 })) {
-    throw new TRPCError({ code: "TOO_MANY_REQUESTS", message: "寫入過於頻繁，請稍後再試" });
-  }
 }
 
 export const recordRouter = router({
