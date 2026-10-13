@@ -37,6 +37,13 @@ src/server/
 - Migration 命名：`<timestamp>_<snake_case_desc>`
 - **正式環境用 `migrate deploy`，禁止 `db push`**
 
+## 編輯 / 刪除流程（TASK-005）
+
+- 更新（含保密）：先檔後 DB；DB 失敗用舊內容寫回檔案（不殘留半新狀態）
+- ChangeLog：每欄位 old → new 一筆；保密資料寫入檔案 `changes` 陣列，DB ChangeLog 不存內容
+- 刪除：僅 ADMIN；DeletionRequest（token 一次性、≤ 15 分鐘、存 hash）→ confirm 軟刪除；保密檔案移 `.trash`
+- 恢復：Admin 清 deletedAt；保密檔案移回主目錄；OperationLog（RESTORE）
+
 ## localdata 儲存層（保密資料，TASK-004）
 
 - 目錄：`LOCALDATA_DIR`（env，預設 `./localdata`），啟動時確保存在
