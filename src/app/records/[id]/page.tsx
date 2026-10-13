@@ -4,7 +4,9 @@ import { auth } from "@/server/auth";
 import { createCallerFactory } from "@/server/trpc/trpc";
 import { appRouter } from "@/server/trpc/root";
 import { getDb } from "@/server/db";
+import { DeleteRequestButton } from "@/components/delete-request-button";
 import { Badge } from "@/components/ui/badge";
+import { buttonVariants } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 
 /**
@@ -53,10 +55,18 @@ export default async function RecordPage({
             更新於 {record.updatedAt.toLocaleString("zh-Hant-TW")}
           </p>
         </CardHeader>
-        <CardContent>
+        <CardContent className="flex flex-col gap-4">
           <pre className="overflow-x-auto rounded-md bg-zinc-100 p-4 text-sm dark:bg-zinc-900">
             {JSON.stringify(record.data, null, 2)}
           </pre>
+          <div className="flex flex-col gap-2 border-t border-zinc-200 pt-4 dark:border-zinc-800">
+            {record.canEdit ? (
+              <Link href={`/records/${id}/edit`} className={buttonVariants({ variant: "outline" })}>
+                編輯
+              </Link>
+            ) : null}
+            {record.canDelete ? <DeleteRequestButton recordId={id} /> : null}
+          </div>
         </CardContent>
       </Card>
     </main>
