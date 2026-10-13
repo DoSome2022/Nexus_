@@ -133,6 +133,16 @@ export async function readRecordFile(recordId: string): Promise<LocalRecordFile>
   }
 }
 
+/** 回滾用：刪除主檔（建立保密資料 DB 失敗時呼叫）；不存在視為成功（冪等，TASK-003） */
+export async function removeRecordFile(recordId: string): Promise<void> {
+  const target = recordFilePath(recordId);
+  try {
+    await fs.unlink(target);
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code !== "ENOENT") throw err;
+  }
+}
+
 /** 軟刪除：檔案移入 localdata/.trash/（DB 的 deletedAt 由 service 層同步處理） */
 export async function moveToTrash(recordId: string): Promise<void> {
   const target = recordFilePath(recordId);
