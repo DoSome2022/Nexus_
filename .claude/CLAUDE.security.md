@@ -56,6 +56,8 @@
 - 搜尋：60/min/user
 - 寫入：30/min/user
 - 忘記密碼：3/hour/email
+- 登入 rate limit 以 `x-forwarded-for` 為 key（TASK-002）：app 容器不暴露 public ports，
+  僅經 NPM 可達；**NPM 必須覆寫 x-forwarded-for**（預設行為），否則可偽造 header 繞過
 
 ## Secret 管理
 
