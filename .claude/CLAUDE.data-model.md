@@ -107,11 +107,12 @@ model DeletionRequest {
 
 ## 搜尋設計
 
-- 啟用 pg_trgm extension
-- `title` 與 `data` 建 GIN index
-- 近義詞：tsvector + 同義詞字典，或應用層 synonym 表
-- 全欄位搜尋：對 `data` 的 JSONB 建 GIN（jsonb_path_ops）
+- 啟用 pg_trgm extension；`title` 與 `data` 建 GIN index（schema 宣告納管）
+- 標題模糊搜尋：`ILIKE %q%` + pg_trgm GIN（**TASK-003 已實作**）+ 權限過濾 + 軟刪除過濾
+- 近義詞：tsvector + 同義詞字典 → **留 TASK-006**（需 thesaurus 檔案進容器 + tsvector 欄位）
+- 全欄位搜尋：對 `data` 的 JSONB 建 GIN（jsonb_path_ops）→ 自由格式內容搜尋需 searchable text 設計，留後續 Task
 - 保密資料（data 為 null）：全欄位搜尋不適用，僅標題可搜（TASK-004 已知限制）
+- 中文情境：trigram 為字元層級，中文模糊效果需實測（TASK-003 驗證）
 
 ## 權限查詢（一律走 service）
 
