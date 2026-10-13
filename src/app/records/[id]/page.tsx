@@ -5,6 +5,8 @@ import { createCallerFactory } from "@/server/trpc/trpc";
 import { appRouter } from "@/server/trpc/root";
 import { getDb } from "@/server/db";
 import { DeleteRequestButton } from "@/components/delete-request-button";
+import { RelationDeleteButton } from "@/components/relation-delete-button";
+import { RelationPicker } from "@/components/relation-picker";
 import { Badge } from "@/components/ui/badge";
 import { buttonVariants } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -59,6 +61,41 @@ export default async function RecordPage({
           <pre className="overflow-x-auto rounded-md bg-zinc-100 p-4 text-sm dark:bg-zinc-900">
             {JSON.stringify(record.data, null, 2)}
           </pre>
+
+          <section className="flex flex-col gap-2 border-t border-zinc-200 pt-4 dark:border-zinc-800">
+            <h2 className="text-sm font-medium">關聯資料</h2>
+            {record.relations.length === 0 ? (
+              <p className="text-sm text-zinc-500">尚無關聯</p>
+            ) : (
+              <ul className="flex flex-col gap-1">
+                {record.relations.map((rel) => (
+                  <li
+                    key={rel.id}
+                    className="flex items-center justify-between gap-2 text-sm"
+                  >
+                    <Link
+                      href={`/records/${rel.related.id}`}
+                      className="flex items-center gap-2 underline-offset-2 hover:underline"
+                    >
+                      <span aria-hidden>{rel.direction === "out" ? "→" : "←"}</span>
+                      <span>{rel.related.title}</span>
+                      {rel.label ? (
+                        <span className="text-zinc-500">（{rel.label}）</span>
+                      ) : null}
+                      {rel.related.isConfidential ? (
+                        <Badge variant="destructive">保密</Badge>
+                      ) : null}
+                    </Link>
+                    {record.canEdit || session.user.role === "ADMIN" ? (
+                      <RelationDeleteButton relationId={rel.id} />
+                    ) : null}
+                  </li>
+                ))}
+              </ul>
+            )}
+            <RelationPicker fromId={id} />
+          </section>
+
           <div className="flex flex-col gap-2 border-t border-zinc-200 pt-4 dark:border-zinc-800">
             {record.canEdit ? (
               <Link href={`/records/${id}/edit`} className={buttonVariants({ variant: "outline" })}>
