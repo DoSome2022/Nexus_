@@ -2,12 +2,28 @@ import { TRPCError } from "@trpc/server";
 import { z } from "zod";
 import { protectedProcedure, router } from "@/server/trpc/trpc";
 import { checkRateLimit } from "@/server/security/rate-limit";
-import { createRecordSchema, searchInputSchema } from "@/lib/schemas/record";
-import { createRecord, getRecord, searchRecords } from "@/server/services/record-service";
+import {
+  confirmDeleteSchema,
+  createRecordSchema,
+  deleteRequestSchema,
+  restoreSchema,
+  searchInputSchema,
+  updateRecordSchema,
+} from "@/lib/schemas/record";
+import {
+  confirmDelete,
+  createRecord,
+  getRecord,
+  listTrash,
+  requestDelete,
+  restoreRecord,
+  searchRecords,
+  updateRecord,
+} from "@/server/services/record-service";
 import type { PermissionActor } from "@/server/security/permissions";
 
 /**
- * Record router（TASK-003）
+ * Record router（TASK-003 / TASK-005）
  * 五步驟：Zod → session（protectedProcedure）→ rate limit → service → DTO
  */
 function actorFromCtx(ctx: { session: { user: { id: string; role: "ADMIN" | "USER" } } | null }): PermissionActor {
@@ -16,15 +32,19 @@ function actorFromCtx(ctx: { session: { user: { id: string; role: "ADMIN" | "USE
   return { id: user.id, role: user.role };
 }
 
+/** 寫入 rate limit：30/min/user（CLAUDE.security.md） */
+function assertWriteAllowed(actorId: string): void {
+  if (!checkRateLimit(`write:${actorId}`, { limit: 30, windowMs: 60_000 })) {
+    throw new TRPCError({ code: "TOO_MANY_REQUESTS", message: "寫入過於頻繁，請稍後再試" });
+  }
+}
+
 export const recordRouter = router({
   create: protectedProcedure
     .input(createRecordSchema)
     .mutation(async ({ ctx, input }) => {
       const actor = actorFromCtx(ctx);
-      // 寫入 rate limit：30/min/user（CLAUDE.security.md）
-      if (!checkRateLimit(`write:${actor.id}`, { limit: 30, windowMs: 60_000 })) {
-        throw new TRPCError({ code: "TOO_MANY_REQUESTS", message: "寫入過於頻繁，請稍後再試" });
-      }
+      assertWriteAllowed(actor.id);
       return createRecord(input, actor);
     }),
 
@@ -44,5 +64,42 @@ export const recordRouter = router({
     .query(async ({ ctx, input }) => {
       const actor = actorFromCtx(ctx);
       return getRecord(input.id, actor);
+    }),
+
+  update: protectedProcedure
+    .input(updateRecordSchema)
+    .mutation(async ({ ctx, input }) => {
+      const actor = actorFromCtx(ctx);
+      assertWriteAllowed(actor.id);
+      return updateRecord(input, actor);
+    }),
+
+  requestDelete: protectedProcedure
+    .input(deleteRequestSchema)
+    .mutation(async ({ ctx, input }) => {
+      const actor = actorFromCtx(ctx);
+      assertWriteAllowed(actor.id);
+      return requestDelete(input.id, actor);
+    }),
+
+  confirmDelete: protectedProcedure
+    .input(confirmDeleteSchema)
+    .mutation(async ({ ctx, input }) => {
+      const actor = actorFromCtx(ctx);
+      assertWriteAllowed(actor.id);
+      return confirmDelete(input.id, input.token, actor);
+    }),
+
+  listTrash: protectedProcedure.query(async ({ ctx }) => {
+    const actor = actorFromCtx(ctx);
+    return listTrash(actor);
+  }),
+
+  restore: protectedProcedure
+    .input(restoreSchema)
+    .mutation(async ({ ctx, input }) => {
+      const actor = actorFromCtx(ctx);
+      assertWriteAllowed(actor.id);
+      return restoreRecord(input.id, actor);
     }),
 });

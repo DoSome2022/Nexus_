@@ -143,6 +143,20 @@ export async function removeRecordFile(recordId: string): Promise<void> {
   }
 }
 
+/** 恢復：檔案從 localdata/.trash/ 移回主目錄（TASK-005，垃圾桶恢復用） */
+export async function restoreFromTrash(recordId: string): Promise<void> {
+  const target = recordFilePath(recordId);
+  const trashPath = path.join(localdataDir(), ".trash", `${path.basename(recordId)}.json`);
+  try {
+    await fs.rename(trashPath, target);
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === "ENOENT") {
+      throw new LocaldataFileNotFoundError(recordId);
+    }
+    throw err;
+  }
+}
+
 /** 軟刪除：檔案移入 localdata/.trash/（DB 的 deletedAt 由 service 層同步處理） */
 export async function moveToTrash(recordId: string): Promise<void> {
   const target = recordFilePath(recordId);

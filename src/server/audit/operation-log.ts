@@ -4,7 +4,14 @@ import { getDb } from "@/server/db";
  * OperationLog 審計寫入（CLAUDE.backend.md：每操作一份，不可省）
  * 登入（TASK-002）與後續 CRUD 共用
  */
-export type OperationAction = "LOGIN" | "CREATE" | "UPDATE" | "DELETE" | "VIEW";
+export type OperationAction =
+  | "LOGIN"
+  | "CREATE"
+  | "UPDATE"
+  | "DELETE"
+  | "DELETE_REQUEST"
+  | "RESTORE"
+  | "VIEW";
 
 export interface OperationLogInput {
   actorId: string;

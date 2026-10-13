@@ -6,10 +6,11 @@ import { z } from "zod";
  */
 export const MAX_DATA_BYTES = 1024 * 1024; // 1MB（CLAUDE.security.md 大小上限）
 
-function isValidJson(s: string): boolean {
+function isValidDataJson(s: string): boolean {
   try {
-    JSON.parse(s);
-    return true;
+    const parsed: unknown = JSON.parse(s);
+    // 頂層必須是物件/陣列（避免 JSON null 字面量在 Prisma Json 欄位上的 runtime 錯誤）
+    return typeof parsed === "object" && parsed !== null;
   } catch {
     return false;
   }
@@ -26,7 +27,7 @@ export const createRecordSchema = z
     dataJson: z
       .string()
       .min(1, "請輸入資料")
-      .refine(isValidJson, { message: "資料必須是合法 JSON" })
+      .refine(isValidDataJson, { message: "資料必須是合法 JSON（物件或陣列）" })
       .refine((s) => byteLength(s) <= MAX_DATA_BYTES, { message: "資料超過 1MB 上限" }),
     isPublic: z.boolean().default(false),
     isEditableByOthers: z.boolean().default(false),
@@ -59,3 +60,30 @@ export const searchInputSchema = searchQuerySchema.extend({
 });
 
 export type SearchInput = z.infer<typeof searchInputSchema>;
+
+/** 編輯輸入（至少變更一個欄位；isConfidential 不可變更，TASK-005 限制） */
+export const updateRecordSchema = z
+  .object({
+    id: z.string().min(1),
+    title: createRecordSchema.shape.title.optional(),
+    dataJson: createRecordSchema.shape.dataJson.optional(),
+    isPublic: z.boolean().optional(),
+    isEditableByOthers: z.boolean().optional(),
+  })
+  .refine(
+    (v) =>
+      v.title !== undefined ||
+      v.dataJson !== undefined ||
+      v.isPublic !== undefined ||
+      v.isEditableByOthers !== undefined,
+    { message: "至少變更一個欄位" },
+  );
+
+export type UpdateRecordInput = z.infer<typeof updateRecordSchema>;
+
+export const deleteRequestSchema = z.object({ id: z.string().min(1) });
+export const confirmDeleteSchema = z.object({
+  id: z.string().min(1),
+  token: z.string().min(1),
+});
+export const restoreSchema = z.object({ id: z.string().min(1) });
