@@ -33,6 +33,10 @@ services:
       - "127.0.0.1:5434:5432"
     volumes:
       - postgres-data:/var/lib/postgresql/data
+      # 同義詞字典（TASK-006；alpine 的 sharedir 是 /usr/local/share/postgresql）
+      # .ths：thesaurus template 實際使用；.syn：legacy，migration 1 重播用（內容需同步）
+      - ./infra/pg-tsearch/nexus_syn.ths:/usr/local/share/postgresql/tsearch_data/nexus_syn.ths:ro
+      - ./infra/pg-tsearch/nexus_syn.syn:/usr/local/share/postgresql/tsearch_data/nexus_syn.syn:ro
     networks:
       - backend
     healthcheck:

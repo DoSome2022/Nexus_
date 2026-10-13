@@ -1,0 +1,15 @@
+# ⚠️ LEGACY：僅供 migration 1（synonym_search，synonym template）在 fresh clone 重播時讀取。
+# 實際使用的字典檔是 nexus_syn.ths（thesaurus template，見 fix_synonym_dictionary migration）。
+# 本檔與 .ths 內容需保持同步。
+# Nexus 同義詞字典（TASK-006，thesaurus template）
+# 格式：每行「主詞 : 同義詞1 同義詞2 …」（thesaurus template 支援多同義詞；
+#       注意 synonym template 每行只支援單一同義詞，勿改用）
+# 主詞在 to_tsvector / plainto_tsquery 時會展開為整組同義詞（雙向命中）
+# 維護流程：改本檔 →
+#   1) docker compose restart db（file bind mount 在編輯器替換檔後會失效，需重掛）
+#   2) ALTER TEXT SEARCH DICTIONARY nexus_syn (DictFile = nexus_syn);
+#   3) UPDATE "Record" SET title = title;（重建 generated column）
+# 限制：PG default parser 無中文分詞，詞條只對完整詞組生效
+員工 : 僱員 同事
+會議 : 例會 開會
+年假 : 特休 休假
