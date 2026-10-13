@@ -38,10 +38,11 @@ model Record {
   authorId           String
   author             User      @relation(fields: [authorId], references: [id])
   title              String
-  schema             Json // 欄位定義
-  data               Json // 實際內容
+  schema             Json? // 欄位定義（保密資料為 null，內容在 localdata/）
+  data               Json? // 實際內容（保密資料為 null，內容在 localdata/）
   isPublic           Boolean   @default(false)
   isEditableByOthers Boolean   @default(false)
+  isConfidential     Boolean   @default(false) // 保密：內容存 localdata/，不進 DB（TASK-004）
   deletedAt          DateTime? // 軟刪除
   createdAt          DateTime  @default(now())
   updatedAt          DateTime  @updatedAt
@@ -52,6 +53,9 @@ model Record {
 
   @@index([authorId])
   @@index([deletedAt])
+  // 搜尋索引（pg_trgm / jsonb GIN，TASK-001 原為 raw SQL；改由 Prisma 納管防 drift 誤刪）
+  @@index([title(ops: raw("gin_trgm_ops"))], type: Gin, map: "Record_title_trgm_idx")
+  @@index([data(ops: raw("jsonb_path_ops"))], type: Gin, map: "Record_data_gin_idx")
 }
 
 model RecordRelation {
