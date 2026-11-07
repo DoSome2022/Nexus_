@@ -7,21 +7,28 @@ import { getDb } from "@/server/db";
 import { DeleteRequestButton } from "@/components/delete-request-button";
 import { RelationDeleteButton } from "@/components/relation-delete-button";
 import { RelationPicker } from "@/components/relation-picker";
+import { RelationSuggestions } from "@/components/relation-suggestions";
 import { Badge } from "@/components/ui/badge";
 import { buttonVariants } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { RecordDataView } from "@/components/record-data-view";
+import { parseRecordTemplateSnapshot, schemaMatchesData } from "@/lib/template-data";
 
 /**
- * 檢視頁（TASK-003）：canRead 檢查在 service；保密內容從 localdata 檔案載入
+ * 檢視頁（TASK-003 / TASK-008）：canRead 檢查在 service；保密內容從 localdata 檔案載入
+ * 範本相符 → 友善欄位顯示；無範本/不符 → 原始 JSON
  */
 const createCaller = createCallerFactory(appRouter);
 
 export default async function RecordPage({
   params,
+  searchParams,
 }: {
   params: Promise<{ id: string }>;
+  searchParams: Promise<{ hl?: string }>;
 }) {
   const { id } = await params;
+  const { hl } = await searchParams;
   const session = await auth();
   if (!session?.user) redirect("/login");
 
@@ -33,6 +40,9 @@ export default async function RecordPage({
   } catch {
     notFound(); // 無權限/不存在一律 404（不洩漏存在性）
   }
+
+  const snapshot = parseRecordTemplateSnapshot(record.schema);
+  const dataMatches = snapshot !== null && schemaMatchesData(snapshot, record.data);
 
   return (
     <main className="flex flex-1 flex-col gap-4 bg-zinc-50 p-6 dark:bg-black">
@@ -58,9 +68,20 @@ export default async function RecordPage({
           </p>
         </CardHeader>
         <CardContent className="flex flex-col gap-4">
-          <pre className="overflow-x-auto rounded-md bg-zinc-100 p-4 text-sm dark:bg-zinc-900">
-            {JSON.stringify(record.data, null, 2)}
-          </pre>
+          {dataMatches && snapshot ? (
+            <RecordDataView snapshot={snapshot} data={record.data} />
+          ) : (
+            <>
+              {snapshot ? (
+                <p className="text-sm text-amber-700 dark:text-amber-400">
+                  此資料格式與範本不相符，以下顯示原始 JSON
+                </p>
+              ) : null}
+              <pre className="overflow-x-auto rounded-md bg-zinc-100 p-4 text-sm dark:bg-zinc-900">
+                {JSON.stringify(record.data, null, 2)}
+              </pre>
+            </>
+          )}
 
           <section className="flex flex-col gap-2 border-t border-zinc-200 pt-4 dark:border-zinc-800">
             <h2 className="text-sm font-medium">關聯資料</h2>
@@ -93,6 +114,11 @@ export default async function RecordPage({
                 ))}
               </ul>
             )}
+            <RelationSuggestions
+              key={`${id}:${hl ?? ""}`}
+              recordId={id}
+              autoExpand={hl === "suggestions"}
+            />
             <RelationPicker fromId={id} />
           </section>
 

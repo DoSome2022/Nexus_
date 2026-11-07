@@ -4,6 +4,7 @@
 
 - User（含 role: ADMIN | USER）
 - Record（自由格式資料）
+- RecordTemplate（表單範本，TASK-008）
 - RecordRelation（資料關聯）
 - OperationLog（操作記錄）
 - ChangeLog（修改記錄）
@@ -46,6 +47,19 @@ model Record {
 
   @@index([authorId])
   @@index([deletedAt])
+}
+
+model RecordTemplate {
+  id          String   @id @default(cuid())
+  name        String   @unique
+  description String?
+  fields      Json     // 欄位定義陣列，zod 驗證（src/lib/schemas/template.ts）
+  createdById String
+  createdBy   User     @relation(fields: [createdById], references: [id])
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@index([createdById])
 }
 
 model RecordRelation {
@@ -107,12 +121,31 @@ model DeletionRequest {
 
 ## 搜尋設計
 
-- 啟用 pg_trgm extension；`title` 與 `data` 建 GIN index（schema 宣告納管）
-- 標題模糊搜尋：`ILIKE %q%` + pg_trgm GIN（**TASK-003 已實作**）+ 權限過濾 + 軟刪除過濾
-- 近義詞：tsvector + 同義詞字典 → **留 TASK-006**（需 thesaurus 檔案進容器 + tsvector 欄位）
-- 全欄位搜尋：對 `data` 的 JSONB 建 GIN（jsonb_path_ops）→ 自由格式內容搜尋需 searchable text 設計，留後續 Task
-- 保密資料（data 為 null）：全欄位搜尋不適用，僅標題可搜（TASK-004 已知限制）
+- 啟用 pg_trgm extension；`title`、`searchContent` 建 trgm GIN（ILIKE 用）；`data` 的
+  jsonb_path_ops GIN **不參與子字串搜尋**（僅 containment 語義，schema 納管防 drift 誤刪）
+- 查詢語意（TASK-010）：空白切詞、去重、上限 10、**每詞 AND**（越多關鍵字越精確）；
+  排序 = 命中標題詞數 → ts_rank → updatedAt
+- `Record.searchContent`（TASK-010）：非保密資料的內容索引文字，service 在 create/update
+  時以 `buildSearchContent`（src/lib/search-text.ts）計算——佈局 `<data 扁平文字>` + U+001F +
+  `<日期衍生詞（data + title）>`（日期 `Y-M-D`/`Y/M/D`/`Y年M月D日` 展開 `M月`、`M月D日` 等，
+  故打「11月」可命中 `2026-11-02`）；title 變更也要重建（title 日期詞在此欄內）
+- 近義詞（TASK-006）：`searchVector` generated column =
+  `to_tsvector('nexus_zh', title || ' ' || coalesce(searchContent,''))` + thesaurus 字典
+  （infra/pg-tsearch 進容器）；ILIKE 是中文主力、向量是次要（中文無分詞、thesaurus 會展開整詞）
+- 保密資料（data 為 null）：**內容永不進 DB**（service 不寫 + CHECK `Record_confidential_no_search_content`）；
+  內容搜尋於查詢時讀**作者自己**的 localdata 檔案做同套 extractor 字面比對（不做同義詞）、合併排序；
+  檔案損毀 → 跳過該筆 + 結構化 log
+- 查詢安全：ILIKE pattern 經 `escapeLikePattern` + SQL `ESCAPE '\'`（`%`/`_` 為字面）
+- 回填：migration 後跑 `npm run backfill:search`（$executeRaw 不動 updatedAt、冪等）
 - 中文情境：trigram 為字元層級，中文模糊效果需實測（TASK-003 驗證）
+
+## 表單範本（TASK-008）
+
+- 範本全站共用、Admin 管理；`Record.schema` 存**建立當下的 snapshot**（`{ v: 1, templateName, fields }`）
+- snapshot 規則：範本之後的編輯/刪除**不影響**既有紀錄；檢視/編輯只讀 snapshot、不 join 範本表
+- 欄位型別：text / textarea / number / boolean / list（逗號分隔）/ date（`YYYY-MM-DD` 字串）；上限 20 欄、欄位名唯一
+- 保密資料的 snapshot 隨內容存 localdata 檔案（DB 列 schema/data 仍 NULL）
+- 資料與 snapshot 的相符檢查：`schemaMatchesData`（欄位集合 + 型別 + required；boolean 的 required 無意義）
 
 ## 權限查詢（一律走 service）
 

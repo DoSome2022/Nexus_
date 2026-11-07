@@ -33,7 +33,7 @@ src/server/
 - 一律 `select` / `include`，禁止預設全欄位
 - 交易用 `prisma.$transaction`
 - 軟刪除：`deletedAt: DateTime?`，查詢預設過濾
-- 搜尋：啟用 `pg_trgm`，對 `title` 與 `data` 建 GIN index
+- 搜尋：啟用 `pg_trgm`，對 `title` 與 `searchContent` 建 trgm GIN（`data` 為 jsonb_path_ops，不參與子字串搜尋）
 - Migration 命名：`<timestamp>_<snake_case_desc>`
 - **正式環境用 `migrate deploy`，禁止 `db push`**
 

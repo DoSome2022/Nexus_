@@ -1,6 +1,7 @@
 import { createHash, randomBytes, randomUUID } from "node:crypto";
 import { TRPCError } from "@trpc/server";
 import type { InputJsonValue } from "@/generated/prisma/internal/prismaNamespace";
+import { Prisma } from "@/generated/prisma/client";
 import { getDb } from "@/server/db";
 import {
   canDelete,
@@ -22,6 +23,27 @@ import {
 import { logger } from "@/server/lib/logger";
 import { listRelationsForRecord, type RelationDTO } from "@/server/services/relation-service";
 import type { CreateRecordInput, UpdateRecordInput } from "@/lib/schemas/record";
+import { templateFieldSchema } from "@/lib/schemas/template";
+import {
+  buildRecordTemplateSnapshot,
+  parseRecordTemplateSnapshot,
+  schemaMatchesData,
+  type RecordTemplateSnapshot,
+} from "@/lib/template-data";
+import {
+  findTitleMentions,
+  type RelationSuggestionDTO,
+} from "@/lib/relation-suggest";
+import {
+  buildDisplayText,
+  buildSearchContent,
+  countTitleMatches,
+  escapeLikePattern,
+  getDisplayText,
+  makeSnippet,
+  matchesAllTerms,
+  tokenizeQuery,
+} from "@/lib/search-text";
 
 /**
  * Record 業務邏輯（TASK-003，依 CLAUDE.backend.md 分層）
@@ -37,6 +59,11 @@ export interface RecordListItemDTO {
   isConfidential: boolean;
   authorId: string;
   updatedAt: Date;
+}
+
+/** 搜尋結果 DTO（TASK-010）：snippet 為命中片段（withSnippet 時才有，經 canRead 過濾後產生） */
+export interface RecordSearchResultDTO extends RecordListItemDTO {
+  snippet: string | null;
 }
 
 export interface RecordDetailDTO extends RecordListItemDTO {
@@ -75,7 +102,7 @@ export async function createRecord(
   const startedAt = Date.now();
   const id = randomUUID();
   const data = JSON.parse(input.dataJson); // schema 已驗證是合法 JSON
-  const schema = {}; // 欄位定義功能留後續 Task
+  const schema = await resolveCreateSchema(input.templateId, data, actor.id);
 
   const commonData = {
     id,
@@ -120,9 +147,11 @@ export async function createRecord(
       throw err;
     }
   } else {
+    // TASK-010：非保密資料寫入內容索引文字（保密資料不寫 → DB NULL，CHECK 約束把關）
+    const searchContent = buildSearchContent(input.title, data) || null;
     await getDb().$transaction([
       getDb().record.create({
-        data: { ...commonData, schema, data },
+        data: { ...commonData, schema: schema as unknown as InputJsonValue, data, searchContent },
       }),
       getDb().operationLog.create({
         data: {
@@ -139,7 +168,43 @@ export async function createRecord(
   return { id };
 }
 
-/** searchRecords 的 raw query 回傳列（TASK-006） */
+/**
+ * 建立時的 schema 決定（TASK-008）：
+ * - 有 templateId → 讀範本、驗證資料相符 → 回 snapshot（範本刪除/損壞 → BAD_REQUEST）
+ * - 無 templateId → 空物件（自由 JSON，沿用 TASK-003 行為）
+ */
+async function resolveCreateSchema(
+  templateId: string | undefined,
+  data: unknown,
+  actorId: string,
+): Promise<RecordTemplateSnapshot | Record<string, never>> {
+  if (!templateId) return {};
+
+  const template = await getDb().recordTemplate.findUnique({
+    where: { id: templateId },
+    select: { id: true, name: true, fields: true },
+  });
+  if (!template) {
+    throw new TRPCError({ code: "BAD_REQUEST", message: "所選範本不存在" });
+  }
+  const parsedFields = templateFieldSchema.array().safeParse(template.fields);
+  if (!parsedFields.success) {
+    logger.error("template_corrupt_fields", { templateId: template.id });
+    throw new TRPCError({ code: "BAD_REQUEST", message: "範本欄位定義異常，請聯絡管理員" });
+  }
+  const snapshot = buildRecordTemplateSnapshot({
+    name: template.name,
+    fields: parsedFields.data,
+  });
+  // 防繞：服務端驗證資料符合範本（必填/型別/未知欄位），不信任 client 序列化
+  if (!schemaMatchesData(snapshot, data)) {
+    logger.warn("record_create_template_mismatch", { templateId: template.id, actorId });
+    throw new TRPCError({ code: "BAD_REQUEST", message: "資料內容不符合所選範本（必填欄位或型別不符）" });
+  }
+  return snapshot;
+}
+
+/** searchRecords 的 raw query 回傳列（TASK-010） */
 interface SearchRow {
   id: string;
   title: string;
@@ -148,31 +213,153 @@ interface SearchRow {
   isConfidential: boolean;
   authorId: string;
   updatedAt: Date;
+  titleMatches: number;
+  rank: number;
+  searchContent: string | null;
 }
 
+export interface SearchOptions {
+  /** 結果附命中片段（結果頁用；下拉建議不需 → 省成本） */
+  withSnippet?: boolean;
+}
+
+/** 合併排序用的候選列（DB 非保密 + 保密檔案掃描） */
+interface SearchCandidate {
+  row: {
+    id: string;
+    title: string;
+    isPublic: boolean;
+    isEditableByOthers: boolean;
+    isConfidential: boolean;
+    authorId: string;
+    updatedAt: Date;
+  };
+  /** 命中標題的詞數（排序訊號：標題命中 > 內容命中） */
+  titleMatches: number;
+  /** ts_rank（保密檔案無 DB 向量 → 0） */
+  rank: number;
+  /** snippet 來源：非保密 = searchContent 顯示段；保密 = 檔案 data 顯示段 */
+  searchContent: string | null;
+}
+
+function compareCandidates(a: SearchCandidate, b: SearchCandidate): number {
+  if (b.titleMatches !== a.titleMatches) return b.titleMatches - a.titleMatches;
+  if (b.rank !== a.rank) return b.rank - a.rank;
+  const byUpdated = b.row.updatedAt.getTime() - a.row.updatedAt.getTime();
+  if (byUpdated !== 0) return byUpdated;
+  return a.row.id.localeCompare(b.row.id);
+}
+
+/**
+ * 全欄位搜尋（TASK-010）：
+ * - 查詢切詞（空白、去重、上限 10）、每詞 AND（Google 式：越多關鍵字越精確）
+ * - 非保密：SQL 每詞（title ILIKE OR searchContent ILIKE OR 同義詞向量）；ILIKE 用 ESCAPE 防萬用字注入
+ * - 保密：作者自己的列讀 localdata 檔案做 JS 比對（內容不進 DB，TASK-004 底線）
+ * - 排序：命中標題詞數 → ts_rank → updatedAt；canRead 兜底
+ */
 export async function searchRecords(
   q: string,
   actor: PermissionActor,
   limit: number,
-): Promise<RecordListItemDTO[]> {
-  // TASK-006：ILIKE（pg_trgm 模糊）OR tsquery（nexus_zh 近義詞）
-  // 排序：直接相符優先 → ts_rank 相關度 → updatedAt
-  // 全部參數化（$1 q、$2 actorId、$3 limit）；config 名 nexus_zh 為常數非輸入
-  const like = `%${q}%`;
-  const rows = await getDb().$queryRaw<SearchRow[]>`
-    SELECT id, title, "isPublic", "isEditableByOthers", "isConfidential", "authorId", "updatedAt"
+  options: SearchOptions = {},
+): Promise<RecordSearchResultDTO[]> {
+  const terms = tokenizeQuery(q);
+  if (terms.length === 0) return [];
+
+  const withSnippet = options.withSnippet === true;
+  const likeOf = (term: string) => `%${escapeLikePattern(term)}%`;
+
+  // Prisma.sql / Prisma.join 只組固定片段；term/pattern 一律參數化
+  const termConditions = terms.map(
+    (term) => Prisma.sql`(
+      "title" ILIKE ${likeOf(term)} ESCAPE '\\'
+      OR "searchContent" ILIKE ${likeOf(term)} ESCAPE '\\'
+      OR "searchVector" @@ plainto_tsquery('nexus_zh', ${term})
+    )`,
+  );
+  const titleMatchesExpr = Prisma.join(
+    terms.map(
+      (term) => Prisma.sql`(CASE WHEN "title" ILIKE ${likeOf(term)} ESCAPE '\\' THEN 1 ELSE 0 END)`,
+    ),
+    " + ",
+  );
+  const contentSelect = withSnippet ? Prisma.sql`"searchContent"` : Prisma.sql`NULL::text`;
+
+  const query = Prisma.sql`
+    SELECT "id", "title", "isPublic", "isEditableByOthers", "isConfidential",
+           "authorId", "updatedAt",
+           (${titleMatchesExpr}) AS "titleMatches",
+           ts_rank("searchVector", plainto_tsquery('nexus_zh', ${q}))::float8 AS "rank",
+           ${contentSelect} AS "searchContent"
     FROM "Record"
     WHERE "deletedAt" IS NULL
-      AND ("title" ILIKE ${like}
-           OR "searchVector" @@ plainto_tsquery('nexus_zh', ${q}))
+      AND "isConfidential" = false
       AND ("isPublic" = true OR "authorId" = ${actor.id})
-    ORDER BY ("title" ILIKE ${like}) DESC,
-             ts_rank("searchVector", plainto_tsquery('nexus_zh', ${q})) DESC,
-             "updatedAt" DESC
+      AND (${Prisma.join(termConditions, " AND ")})
+    ORDER BY "titleMatches" DESC, "rank" DESC, "updatedAt" DESC
     LIMIT ${limit}
   `;
+  const rows = await getDb().$queryRaw<SearchRow[]>(query);
+
+  // 保密資料：內容在 localdata（不進 DB），作者自己的列讀檔做同套 extractor 比對
+  const ownConfidential = await getDb().record.findMany({
+    where: { deletedAt: null, authorId: actor.id, isConfidential: true },
+    select: {
+      id: true,
+      title: true,
+      isPublic: true,
+      isEditableByOthers: true,
+      isConfidential: true,
+      authorId: true,
+      updatedAt: true,
+    },
+  });
+  const confidentialCandidates = (
+    await Promise.all(
+      ownConfidential.map(async (row): Promise<SearchCandidate | null> => {
+        if (!canRead(row, actor)) return null;
+        try {
+          const file = await readRecordFile(row.id);
+          const indexText = buildSearchContent(row.title, file.data);
+          if (!matchesAllTerms(row.title, indexText, terms)) return null;
+          return {
+            row,
+            titleMatches: countTitleMatches(terms, row.title),
+            rank: 0,
+            searchContent: withSnippet ? buildDisplayText(file.data) : null,
+          };
+        } catch (err) {
+          // 檔案遺失/損毀：跳過該筆，不中斷整個搜尋（不印內容/路徑）
+          logger.error("search_localdata_read_failed", {
+            recordId: row.id,
+            error: err instanceof Error ? err.name : "unknown",
+          });
+          return null;
+        }
+      }),
+    )
+  ).filter((c): c is SearchCandidate => c !== null);
+
   // 兜底：SQL 已過濾，此處再跑 canRead 純函式（防禦性，見 CLAUDE.security.md）
-  return rows.filter((r) => canRead(r, actor)).map(toListItem);
+  const dbCandidates: SearchCandidate[] = rows
+    .filter((r) => canRead(r, actor))
+    .map((r) => ({
+      row: r,
+      titleMatches: r.titleMatches,
+      rank: r.rank,
+      searchContent: withSnippet ? getDisplayText(r.searchContent) : null,
+    }));
+
+  // 合併（SQL 已排除保密，Map 去重為防禦）→ 排序 → slice → 最後才做 snippet
+  const merged = new Map<string, SearchCandidate>();
+  for (const c of [...dbCandidates, ...confidentialCandidates]) {
+    if (!merged.has(c.row.id)) merged.set(c.row.id, c);
+  }
+  const sorted = [...merged.values()].sort(compareCandidates).slice(0, limit);
+  return sorted.map((c) => ({
+    ...toListItem(c.row),
+    snippet: withSnippet && c.searchContent ? makeSnippet(c.searchContent, terms) : null,
+  }));
 }
 
 export async function getRecord(id: string, actor: PermissionActor): Promise<RecordDetailDTO> {
@@ -224,6 +411,48 @@ export async function getRecord(id: string, actor: PermissionActor): Promise<Rec
   };
 }
 
+/** 候選標題查詢（TASK-009）：只取權限欄位與標題，絕不讀 data/schema（防洩漏與無謂 IO） */
+const TITLE_CANDIDATE_SELECT = {
+  id: true,
+  title: true,
+  authorId: true,
+  isPublic: true,
+  isEditableByOthers: true,
+  isConfidential: true,
+} as const;
+
+/** 可讀記錄的標題清單（SQL 先過公開/作者，canRead 兜底；上限 500 筆） */
+async function listReadableTitles(actor: PermissionActor): Promise<RelationSuggestionDTO[]> {
+  const rows = await getDb().record.findMany({
+    where: {
+      deletedAt: null,
+      OR: [{ isPublic: true }, { authorId: actor.id }],
+    },
+    select: TITLE_CANDIDATE_SELECT,
+    orderBy: { updatedAt: "desc" },
+    take: 500,
+  });
+  return rows
+    .filter((r) => canRead(r, actor))
+    .map((r) => ({ id: r.id, title: r.title, isConfidential: r.isConfidential }));
+}
+
+/**
+ * 關聯建議（TASK-009）：掃描記錄標題 + data 中提及的其他可讀記錄標題
+ * - 被檢視記錄不可讀 → getRecord 拋 NOT_FOUND（不洩漏存在性）
+ * - 排除自己與已關聯（雙向，直接重用 getRecord DTO 內的 relations，不多查一次）
+ * - 只建議、不自動建立（加入走 relation.create）
+ */
+export async function suggestRelations(
+  id: string,
+  actor: PermissionActor,
+): Promise<RelationSuggestionDTO[]> {
+  const record = await getRecord(id, actor);
+  const excludeIds = new Set([id, ...record.relations.map((r) => r.related.id)]);
+  const candidates = await listReadableTitles(actor);
+  return findTitleMentions(record.title, record.data, candidates, excludeIds);
+}
+
 /** JSON 安全型別（ChangeLog old/new 值） */
 export type JsonLike =
   | string
@@ -270,6 +499,24 @@ export function diffRecordFields(
   return diffs;
 }
 
+/**
+ * TASK-008 防繞：原本與範本 snapshot 相符的紀錄，新資料也必須相符
+ * （表單模式 UI 恒序列化相符資料；此處擋直接打 API 把友善表單紀錄改壞）
+ * 原本已不相符的紀錄不擋（避免卡死 legacy/被改過的資料）
+ */
+function assertDataStillMatchesSchema(
+  schema: unknown,
+  oldData: unknown,
+  newData: unknown,
+): void {
+  const snapshot = parseRecordTemplateSnapshot(schema);
+  if (!snapshot) return;
+  if (!schemaMatchesData(snapshot, oldData)) return;
+  if (!schemaMatchesData(snapshot, newData)) {
+    throw new TRPCError({ code: "BAD_REQUEST", message: "資料內容不符合原範本格式（必填欄位或型別不符）" });
+  }
+}
+
 /** 編輯（TASK-005）：canEdit 檢查；保密資料 ChangeLog 寫檔案、DB 失敗檔案回滾 */
 export async function updateRecord(
   input: UpdateRecordInput,
@@ -282,7 +529,9 @@ export async function updateRecord(
       id: true,
       authorId: true,
       title: true,
+      schema: true,
       data: true,
+      searchContent: true,
       isPublic: true,
       isEditableByOthers: true,
       isConfidential: true,
@@ -311,6 +560,9 @@ export async function updateRecord(
   if (record.isConfidential) {
     // 舊值以檔案內容為準（DB data 為 NULL）
     const oldFile = await readRecordFile(record.id);
+    if (input.dataJson !== undefined) {
+      assertDataStillMatchesSchema(oldFile.schema, oldFile.data, JSON.parse(input.dataJson));
+    }
     const diffs = diffRecordFields(
       { ...record, data: oldFile.data as JsonLike },
       input,
@@ -353,14 +605,27 @@ export async function updateRecord(
   }
 
   // 非保密：DB 單一 transaction（update + ChangeLog 每欄位 + OperationLog）
+  if (input.dataJson !== undefined) {
+    assertDataStillMatchesSchema(record.schema, record.data, JSON.parse(input.dataJson));
+  }
+  // TASK-010：標題/資料變更時重建內容索引文字（title 日期衍生詞也在 searchContent 內）；
+  // legacy NULL 一併補值（derived 欄位不寫 ChangeLog）
+  const nextData = input.dataJson !== undefined ? JSON.parse(input.dataJson) : record.data;
+  const rebuildSearch =
+    input.title !== undefined || input.dataJson !== undefined || record.searchContent === null;
+  const nextSearchContent = rebuildSearch
+    ? (buildSearchContent(input.title ?? record.title, nextData) || null)
+    : record.searchContent;
+  const searchContentChanged = nextSearchContent !== record.searchContent;
   const diffs = diffRecordFields({ ...record, data: record.data as JsonLike }, input);
-  if (diffs.length === 0) return { id: record.id };
+  if (diffs.length === 0 && !searchContentChanged) return { id: record.id };
   await getDb().$transaction([
     getDb().record.update({
       where: { id: record.id },
       data: {
         ...updates,
         ...(input.dataJson !== undefined ? { data: JSON.parse(input.dataJson) } : {}),
+        ...(searchContentChanged ? { searchContent: nextSearchContent } : {}),
       },
     }),
     ...diffs.map((d) =>

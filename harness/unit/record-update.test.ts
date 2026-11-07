@@ -54,6 +54,7 @@ import {
   restoreRecord,
   updateRecord,
 } from "@/server/services/record-service";
+import { buildSearchContent } from "@/lib/search-text";
 import type { UpdateRecordInput } from "@/lib/schemas/record";
 
 const author = { id: "me", role: "USER" as const };
@@ -65,6 +66,7 @@ function dbRecord(overrides: Record<string, unknown> = {}) {
     authorId: "me",
     title: "舊標題",
     data: { note: "舊內容" },
+    searchContent: null,
     isPublic: false,
     isEditableByOthers: false,
     isConfidential: false,
@@ -154,6 +156,59 @@ describe("updateRecord（保密回滾）", () => {
     await expect(
       updateRecord({ id: "r1", title: "x" }, author),
     ).rejects.toThrow(/無權編輯/);
+  });
+});
+
+describe("updateRecord（searchContent 重建，TASK-010）", () => {
+  it("非保密：data 變更 → update payload 含 searchContent", async () => {
+    mocks.findUnique.mockResolvedValue(
+      dbRecord({ searchContent: buildSearchContent("舊標題", { note: "舊內容" }) }),
+    );
+    await updateRecord({ id: "r1", dataJson: '{"note":"新內容"}' }, author);
+    const updateArg = mocks.recordUpdate.mock.calls[0][0];
+    expect(updateArg.data.searchContent).toContain("新內容");
+  });
+
+  it("非保密：僅 title 變更 → 重建（title 日期衍生詞入 searchContent）", async () => {
+    mocks.findUnique.mockResolvedValue(dbRecord({ searchContent: null }));
+    await updateRecord({ id: "r1", title: "會議 2026-11-02" }, author);
+    const updateArg = mocks.recordUpdate.mock.calls[0][0];
+    expect(updateArg.data.searchContent).toContain("11月");
+  });
+
+  it("非保密：legacy NULL、內容語義相同 → 補值、不寫 ChangeLog、仍寫 OperationLog", async () => {
+    mocks.findUnique.mockResolvedValue(dbRecord({ searchContent: null }));
+    await updateRecord({ id: "r1", dataJson: '{"note":"舊內容"}' }, author);
+    const updateArg = mocks.recordUpdate.mock.calls[0][0];
+    expect(updateArg.data.searchContent).toContain("舊內容");
+    expect(mocks.changeLogCreate).not.toHaveBeenCalled();
+    expect(mocks.operationLogCreate).toHaveBeenCalledTimes(1);
+  });
+
+  it("非保密：無變更且 searchContent 已是最新 → 不寫任何東西", async () => {
+    mocks.findUnique.mockResolvedValue(
+      dbRecord({ searchContent: buildSearchContent("舊標題", { note: "舊內容" }) }),
+    );
+    await updateRecord({ id: "r1", dataJson: '{"note":"舊內容"}' }, author);
+    expect(mocks.recordUpdate).not.toHaveBeenCalled();
+    expect(mocks.operationLogCreate).not.toHaveBeenCalled();
+  });
+
+  it("保密：update payload 不含 searchContent", async () => {
+    mocks.findUnique.mockResolvedValue(dbRecord({ isConfidential: true, data: null }));
+    mocks.readRecordFile.mockResolvedValue({
+      version: 1 as const,
+      id: "r1",
+      authorId: "me",
+      schema: {},
+      data: { note: "舊內容" },
+      changes: [],
+      createdAt: "2026-10-13T00:00:00.000Z",
+      updatedAt: "2026-10-13T00:00:00.000Z",
+    });
+    await updateRecord({ id: "r1", title: "新標題" }, author);
+    const updateArg = mocks.recordUpdate.mock.calls[0][0];
+    expect(updateArg.data).not.toHaveProperty("searchContent");
   });
 });
 

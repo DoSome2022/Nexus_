@@ -8,6 +8,8 @@ import { SearchBar } from "@/components/search-bar";
 import { LogoutButton } from "@/components/logout-button";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent } from "@/components/ui/card";
+import { HighlightSnippet } from "@/components/highlight-snippet";
+import { tokenizeQuery } from "@/lib/search-text";
 
 /**
  * 搜尋結果頁（TASK-003）：搜尋條置頂 + 列表；條件走 URL searchParams
@@ -30,7 +32,9 @@ export default async function SearchPage({
     session,
   });
 
-  const results = q ? await caller.record.search({ q }) : [];
+  // TASK-010：withSnippet 取命中片段（含保密資料內容片段，經 canRead 過濾）
+  const results = q ? await caller.record.search({ q, withSnippet: true }) : [];
+  const terms = q ? tokenizeQuery(q) : [];
 
   return (
     <div className="flex min-h-full flex-1 flex-col">
@@ -53,17 +57,24 @@ export default async function SearchPage({
               <li key={r.id}>
                 <Link href={`/records/${r.id}`} className="block">
                   <Card className="transition-colors hover:bg-zinc-100 dark:hover:bg-zinc-900">
-                    <CardContent className="flex items-center justify-between gap-3 py-4">
-                      <span className="font-medium">{r.title}</span>
-                      <span className="flex shrink-0 gap-1">
-                        {r.isConfidential ? (
-                          <Badge variant="destructive">保密</Badge>
-                        ) : r.isPublic ? (
-                          <Badge variant="secondary">公開</Badge>
-                        ) : (
-                          <Badge variant="outline">私有</Badge>
-                        )}
+                    <CardContent className="flex flex-col gap-1 py-4">
+                      <span className="flex items-center justify-between gap-3">
+                        <span className="font-medium">{r.title}</span>
+                        <span className="flex shrink-0 gap-1">
+                          {r.isConfidential ? (
+                            <Badge variant="destructive">保密</Badge>
+                          ) : r.isPublic ? (
+                            <Badge variant="secondary">公開</Badge>
+                          ) : (
+                            <Badge variant="outline">私有</Badge>
+                          )}
+                        </span>
                       </span>
+                      {r.snippet ? (
+                        <span className="line-clamp-2 text-sm text-zinc-600 dark:text-zinc-400">
+                          <HighlightSnippet text={r.snippet} terms={terms} />
+                        </span>
+                      ) : null}
                     </CardContent>
                   </Card>
                 </Link>

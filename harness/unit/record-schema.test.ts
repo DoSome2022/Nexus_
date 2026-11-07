@@ -93,4 +93,10 @@ describe("searchInputSchema", () => {
     const r = searchInputSchema.parse({ q: "x" });
     expect(r.limit).toBe(50);
   });
+
+  it("withSnippet 預設 false、true 接受、非 boolean 拒絕（TASK-010）", () => {
+    expect(searchInputSchema.parse({ q: "x" }).withSnippet).toBe(false);
+    expect(searchInputSchema.parse({ q: "x", withSnippet: true }).withSnippet).toBe(true);
+    expect(searchInputSchema.safeParse({ q: "x", withSnippet: "yes" }).success).toBe(false);
+  });
 });

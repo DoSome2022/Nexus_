@@ -13,3 +13,7 @@ export const relationCreateSchema = z.object({
 export type RelationCreateInput = z.infer<typeof relationCreateSchema>;
 
 export const relationDeleteSchema = z.object({ id: z.string().min(1) });
+
+/** 關聯建議查詢（TASK-009） */
+export const relationSuggestSchema = z.object({ id: z.string().min(1) });
+

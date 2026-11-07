@@ -20,7 +20,7 @@ function byteLength(s: string): number {
   return new TextEncoder().encode(s).length; // Buffer 在瀏覽器不可用
 }
 
-/** API 層建立輸入（三旗標，保密與另兩者互斥） */
+/** API 層建立輸入（三旗標，保密與另兩者互斥；templateId 為 TASK-008 範本選用） */
 export const createRecordSchema = z
   .object({
     title: z.string().trim().min(1, "請輸入標題").max(200, "標題過長"),
@@ -32,6 +32,7 @@ export const createRecordSchema = z
     isPublic: z.boolean().default(false),
     isEditableByOthers: z.boolean().default(false),
     isConfidential: z.boolean().default(false),
+    templateId: z.string().trim().min(1).optional(),
   })
   .refine((v) => !(v.isConfidential && (v.isPublic || v.isEditableByOthers)), {
     message: "保密資料不可同時設為公開或可被他人編輯",
@@ -57,6 +58,8 @@ export const searchQuerySchema = z.object({
 
 export const searchInputSchema = searchQuerySchema.extend({
   limit: z.number().int().min(1).max(100).default(50),
+  // TASK-010：結果附命中片段（結果頁用；下拉建議/關聯選取器不傳 → 省成本）
+  withSnippet: z.boolean().default(false),
 });
 
 export type SearchInput = z.infer<typeof searchInputSchema>;

@@ -13,6 +13,7 @@ import { Input } from "@/components/ui/input";
  */
 export function RelationPicker({ fromId }: { fromId: string }) {
   const router = useRouter();
+  const utils = trpc.useUtils();
   const [query, setQuery] = useState("");
   const [debounced, setDebounced] = useState("");
   const [label, setLabel] = useState("");
@@ -33,6 +34,7 @@ export function RelationPicker({ fromId }: { fromId: string }) {
       setQuery("");
       setLabel("");
       setOpen(false);
+      void utils.relation.suggest.invalidate(); // TASK-009：手動加入後同步建議清單
       router.refresh();
     },
   });

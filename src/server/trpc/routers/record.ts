@@ -50,7 +50,7 @@ export const recordRouter = router({
       if (!checkRateLimit(`search:${actor.id}`, { limit: 60, windowMs: 60_000 })) {
         throw new TRPCError({ code: "TOO_MANY_REQUESTS", message: "搜尋過於頻繁，請稍後再試" });
       }
-      return searchRecords(input.q, actor, input.limit);
+      return searchRecords(input.q, actor, input.limit, { withSnippet: input.withSnippet });
     }),
 
   get: protectedProcedure

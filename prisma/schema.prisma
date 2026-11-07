@@ -25,6 +25,7 @@ model User {
   updatedAt           DateTime             @updatedAt
   deletedAt           DateTime?
   records             Record[]
+  recordTemplates     RecordTemplate[]
   operationLogs       OperationLog[]
   changeLogs          ChangeLog[]
   passwordResetTokens PasswordResetToken[]
@@ -43,7 +44,9 @@ model Record {
   isPublic           Boolean   @default(false)
   isEditableByOthers Boolean   @default(false)
   isConfidential     Boolean   @default(false) // 保密：內容存 localdata/，不進 DB（TASK-004）
-  // 近義詞搜尋（TASK-006）：generated column，Prisma 不管理（migration 內 raw SQL）
+  // 內容索引文字（TASK-010）：非保密資料由 service 寫入；保密資料一律 NULL（CHECK 約束於 migration 內）
+  searchContent      String?
+  // 近義詞搜尋（TASK-006）：generated column，Prisma 不管理（migration 內 raw SQL；TASK-010 起含 searchContent）
   searchVector       Unsupported("tsvector")?
   deletedAt          DateTime? // 軟刪除
   createdAt          DateTime  @default(now())
@@ -58,8 +61,24 @@ model Record {
   // 搜尋索引（pg_trgm / jsonb GIN，TASK-001 原為 raw SQL；改由 Prisma 納管防 drift 誤刪）
   @@index([title(ops: raw("gin_trgm_ops"))], type: Gin, map: "Record_title_trgm_idx")
   @@index([data(ops: raw("jsonb_path_ops"))], type: Gin, map: "Record_data_gin_idx")
+  // 內容子字串索引（TASK-010）
+  @@index([searchContent(ops: raw("gin_trgm_ops"))], type: Gin, map: "Record_search_content_trgm_idx")
   // 近義詞搜尋索引（TASK-006）
   @@index([searchVector], type: Gin, map: "Record_search_vector_idx")
+}
+
+// 表單範本（TASK-008）：全站共用、Admin 管理；Record.schema 存建立時的 snapshot
+model RecordTemplate {
+  id          String   @id @default(cuid())
+  name        String   @unique
+  description String?
+  fields      Json // 欄位定義陣列，zod 驗證（src/lib/schemas/template.ts）
+  createdById String
+  createdBy   User     @relation(fields: [createdById], references: [id])
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@index([createdById])
 }
 
 model RecordRelation {
