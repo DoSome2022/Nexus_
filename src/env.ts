@@ -14,6 +14,8 @@ const envSchema = z.object({
   APP_URL: z.string().url(),
   // 保密資料檔案儲存目錄（TASK-004）；容器內 bind mount 為 /app/localdata
   LOCALDATA_DIR: z.string().default("./localdata"),
+  // 隱藏資料庫總覽頁 /admin/db 的 URL token（TASK-011）；未設定時該頁一律 404
+  ADMIN_DB_TOKEN: z.string().min(32, "ADMIN_DB_TOKEN must be at least 32 chars").optional(),
 });
 
 export type Env = z.infer<typeof envSchema>;

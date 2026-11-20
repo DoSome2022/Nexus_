@@ -15,6 +15,8 @@ function stubValidEnv() {
   for (const [k, v] of Object.entries(VALID_ENV)) {
     vi.stubEnv(k, v);
   }
+  // 避免開發者 shell 環境污染測試（TASK-011）
+  vi.stubEnv("ADMIN_DB_TOKEN", undefined);
 }
 
 async function loadEnv() {
@@ -51,5 +53,22 @@ describe("src/env.ts", () => {
     vi.stubEnv("NODE_ENV", undefined);
     const env = await loadEnv();
     expect(env.NODE_ENV).toBe("development");
+  });
+
+  it("ADMIN_DB_TOKEN 未設定時為 undefined（TASK-011，功能停用不影響啟動）", async () => {
+    vi.stubEnv("ADMIN_DB_TOKEN", undefined);
+    const env = await loadEnv();
+    expect(env.ADMIN_DB_TOKEN).toBeUndefined();
+  });
+
+  it("ADMIN_DB_TOKEN 32 字元通過驗證", async () => {
+    vi.stubEnv("ADMIN_DB_TOKEN", "b".repeat(32));
+    const env = await loadEnv();
+    expect(env.ADMIN_DB_TOKEN).toBe("b".repeat(32));
+  });
+
+  it("ADMIN_DB_TOKEN 少於 32 字元應 throw", async () => {
+    vi.stubEnv("ADMIN_DB_TOKEN", "too-short");
+    await expect(loadEnv()).rejects.toThrow(/ADMIN_DB_TOKEN/);
   });
 });

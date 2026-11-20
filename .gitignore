@@ -49,3 +49,6 @@ letsencrypt/
 next-env.d.ts
 
 /src/generated/prisma
+
+# 本機測試帳號筆記（含明文密碼，不入版控）
+測試AC.md
