@@ -33,13 +33,19 @@ export const createRecordSchema = z
     isEditableByOthers: z.boolean().default(false),
     isConfidential: z.boolean().default(false),
     templateId: z.string().trim().min(1).optional(),
+    // TASK-012 後續：建立時可選分類（表單多選；服務層驗證存在）
+    categoryIds: z
+      .array(z.string().min(1))
+      .max(20, "每筆資料最多 20 個分類")
+      .optional()
+      .default([]),
   })
   .refine((v) => !(v.isConfidential && (v.isPublic || v.isEditableByOthers)), {
     message: "保密資料不可同時設為公開或可被他人編輯",
     path: ["isConfidential"],
   });
 
-export type CreateRecordInput = z.infer<typeof createRecordSchema>;
+export type CreateRecordInput = z.input<typeof createRecordSchema>;
 
 /** 表單層輸入（三選一可見性，submit 時換算成 API 旗標；isEditableByOthers 由 useForm defaultValues 提供） */
 export const createRecordFormSchema = z.object({
@@ -60,6 +66,8 @@ export const searchInputSchema = searchQuerySchema.extend({
   limit: z.number().int().min(1).max(100).default(50),
   // TASK-010：結果附命中片段（結果頁用；下拉建議/關聯選取器不傳 → 省成本）
   withSnippet: z.boolean().default(false),
+  // TASK-012：結果附分類路徑（結果頁用；熱路徑下拉不傳 → 省 2 個查詢）
+  withCategories: z.boolean().default(false),
 });
 
 export type SearchInput = z.infer<typeof searchInputSchema>;
@@ -72,13 +80,16 @@ export const updateRecordSchema = z
     dataJson: createRecordSchema.shape.dataJson.optional(),
     isPublic: z.boolean().optional(),
     isEditableByOthers: z.boolean().optional(),
+    // TASK-012 後續：編輯時「取代整組」分類連結
+    categoryIds: z.array(z.string().min(1)).max(20, "每筆資料最多 20 個分類").optional(),
   })
   .refine(
     (v) =>
       v.title !== undefined ||
       v.dataJson !== undefined ||
       v.isPublic !== undefined ||
-      v.isEditableByOthers !== undefined,
+      v.isEditableByOthers !== undefined ||
+      v.categoryIds !== undefined,
     { message: "至少變更一個欄位" },
   );
 

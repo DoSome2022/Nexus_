@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo } from "react";
+import { useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import { FormProvider, useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
@@ -9,6 +9,7 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { RecordDataFields } from "@/components/record-data-fields";
+import { CategoryPicker } from "@/components/category-picker";
 import {
   buildRecordFormSchema,
   serializeTemplateValues,
@@ -18,9 +19,10 @@ import {
 } from "@/lib/template-data";
 
 /**
- * 編輯資料表單（TASK-005 / TASK-008）
+ * 編輯資料表單（TASK-005 / TASK-008 / TASK-012 後續）
  * - 保密資料：儲存位置與可見性不可變更（radio 停用，僅可改 title/data）
  * - 範本相符 → 依 snapshot 欄位回填表單；不相符/無範本 → JSON textarea（不切換範本）
+ * - 分類多選：儲存時「取代整組」連結
  */
 interface RecordEditFormProps {
   id: string;
@@ -34,6 +36,8 @@ interface RecordEditFormProps {
   template: RecordTemplateSnapshot | null;
   /** 有 snapshot 但資料不符 → JSON 模式 + 提示 */
   templateMismatch: boolean;
+  /** 目前的分類 id 清單（TASK-012 後續） */
+  initialCategoryIds: string[];
 }
 
 export function RecordEditForm({
@@ -46,8 +50,10 @@ export function RecordEditForm({
   isConfidential,
   template,
   templateMismatch,
+  initialCategoryIds,
 }: RecordEditFormProps) {
   const router = useRouter();
+  const [categoryIds, setCategoryIds] = useState<string[]>(initialCategoryIds);
   const updateMutation = trpc.record.update.useMutation({
     onSuccess: () => {
       router.push(`/records/${id}?hl=suggestions`); // TASK-009：跳轉後自動展開關聯建議
@@ -92,6 +98,7 @@ export function RecordEditForm({
         : values.visibility === "CONFIDENTIAL"
           ? false
           : values.isEditableByOthers,
+      categoryIds,
     });
   }
 
@@ -177,6 +184,11 @@ export function RecordEditForm({
               />
               允許他人編輯{isConfidential ? "（保密資料不可選）" : ""}
             </label>
+
+            <div className="flex flex-col gap-2">
+              <label className="text-sm font-medium">分類（儲存時取代整組）</label>
+              <CategoryPicker value={categoryIds} onChange={setCategoryIds} />
+            </div>
 
             {updateMutation.error ? (
               <p role="alert" className="text-sm text-red-600">

@@ -4,6 +4,7 @@ import {
   createRecordSchema,
   MAX_DATA_BYTES,
   searchInputSchema,
+  updateRecordSchema,
 } from "@/lib/schemas/record";
 
 /**
@@ -98,5 +99,32 @@ describe("searchInputSchema", () => {
     expect(searchInputSchema.parse({ q: "x" }).withSnippet).toBe(false);
     expect(searchInputSchema.parse({ q: "x", withSnippet: true }).withSnippet).toBe(true);
     expect(searchInputSchema.safeParse({ q: "x", withSnippet: "yes" }).success).toBe(false);
+  });
+});
+
+describe("categoryIds（TASK-012 後續）", () => {
+  it("create 省略 categoryIds → 預設 []", () => {
+    expect(createRecordSchema.parse(valid).categoryIds).toEqual([]);
+  });
+
+  it("create 帶合法 categoryIds → 通過", () => {
+    expect(createRecordSchema.parse({ ...valid, categoryIds: ["c1", "c2"] }).categoryIds).toEqual([
+      "c1",
+      "c2",
+    ]);
+  });
+
+  it("create 超過 20 個分類 → 拒絕", () => {
+    const ids = Array.from({ length: 21 }, (_, i) => `c${i}`);
+    expect(createRecordSchema.safeParse({ ...valid, categoryIds: ids }).success).toBe(false);
+  });
+
+  it("update 只改 categoryIds → 合法（至少變更一項）", () => {
+    expect(updateRecordSchema.safeParse({ id: "r1", categoryIds: ["c1"] }).success).toBe(true);
+  });
+
+  it("update categoryIds 超過 20 → 拒絕", () => {
+    const ids = Array.from({ length: 21 }, (_, i) => `c${i}`);
+    expect(updateRecordSchema.safeParse({ id: "r1", categoryIds: ids }).success).toBe(false);
   });
 });

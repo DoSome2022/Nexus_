@@ -17,11 +17,17 @@ const mocks = vi.hoisted(() => ({
   createRecordFile: vi.fn(),
   removeRecordFile: vi.fn(),
   readRecordFile: vi.fn(),
+  listCategoryRefs: vi.fn(),
+  categoryFindMany: vi.fn(),
+  recordCategoryCreate: vi.fn(),
+  getCategoryNamePathsByIds: vi.fn(),
 }));
 
 vi.mock("@/server/db", () => ({
   getDb: () => ({
     record: { findMany: mocks.findMany, findUnique: mocks.findUnique, create: mocks.recordCreate },
+    category: { findMany: mocks.categoryFindMany },
+    recordCategory: { create: mocks.recordCategoryCreate },
     operationLog: { create: mocks.logCreate },
     $transaction: mocks.transaction,
     $queryRaw: mocks.queryRaw,
@@ -34,6 +40,14 @@ vi.mock("@/server/repositories/localdata-repository", () => ({
   readRecordFile: mocks.readRecordFile,
   LocaldataFileNotFoundError: class extends Error {},
   LocaldataCorruptedFileError: class extends Error {},
+}));
+
+// TASK-012：record-service 只依賴 category-query 的批次 refs 查詢（內部邏輯另測）
+vi.mock("@/server/services/category-query", () => ({
+  listCategoryRefsForRecords: mocks.listCategoryRefs,
+  rebuildRecordSearchContent: vi.fn(),
+  logRebuildFailure: vi.fn(),
+  getCategoryNamePathsByIds: mocks.getCategoryNamePathsByIds,
 }));
 
 import { createRecord, searchRecords } from "@/server/services/record-service";
@@ -65,6 +79,10 @@ beforeEach(() => {
   });
   // searchRecords 會另查作者保密列，預設無
   mocks.findMany.mockResolvedValue([]);
+  mocks.listCategoryRefs.mockResolvedValue(new Map());
+  mocks.categoryFindMany.mockResolvedValue([]);
+  mocks.recordCategoryCreate.mockResolvedValue({ id: "link1" });
+  mocks.getCategoryNamePathsByIds.mockResolvedValue([]);
 });
 
 describe("searchRecords 權限兜底", () => {
@@ -153,6 +171,42 @@ describe("searchRecords 保密內容（TASK-010）", () => {
   });
 });
 
+describe("searchRecords 分類 enrich（TASK-012）", () => {
+  it("預設不查分類：categories 為 [] 且不呼叫 helper", async () => {
+    mocks.queryRaw.mockResolvedValue([row({ id: "1", isPublic: true })]);
+    const result = await searchRecords("x", actor, 50);
+    expect(result[0]?.categories).toEqual([]);
+    expect(mocks.listCategoryRefs).not.toHaveBeenCalled();
+  });
+
+  it("withCategories：slice 後只批次呼叫一次，DTO 附分類 path", async () => {
+    mocks.queryRaw.mockResolvedValue([
+      row({ id: "1", isPublic: true }),
+      row({ id: "2", isPublic: true }),
+    ]);
+    mocks.listCategoryRefs.mockResolvedValue(
+      new Map([
+        [
+          "1",
+          [
+            { id: "c1", name: "橙", path: "食物 / 水果 / 橙", namePath: ["食物", "水果", "橙"] },
+            { id: "c2", name: "維他命", path: "維他命", namePath: ["維他命"] },
+          ],
+        ],
+        ["2", []],
+      ]),
+    );
+    const result = await searchRecords("x", actor, 50, { withCategories: true });
+    expect(mocks.listCategoryRefs).toHaveBeenCalledTimes(1);
+    expect(mocks.listCategoryRefs).toHaveBeenCalledWith(["1", "2"]);
+    expect(result[0]?.categories).toEqual([
+      { id: "c1", name: "橙", path: "食物 / 水果 / 橙" },
+      { id: "c2", name: "維他命", path: "維他命" },
+    ]);
+    expect(result[1]?.categories).toEqual([]);
+  });
+});
+
 describe("createRecord", () => {
   const confidentialInput: CreateRecordInput = {
     title: "機密",
@@ -196,6 +250,58 @@ describe("createRecord", () => {
 
   it("保密建立：DB payload 不含 searchContent（內容只在 localdata）", async () => {
     await createRecord(confidentialInput, actor);
+    const payload = mocks.recordCreate.mock.calls[0][0];
+    expect(payload.data).not.toHaveProperty("searchContent");
+  });
+});
+
+describe("createRecord 分類（TASK-012 後續）", () => {
+  const baseInput: CreateRecordInput = {
+    title: "機密",
+    dataJson: '{"plan":"Q1"}',
+    isPublic: false,
+    isEditableByOthers: false,
+    isConfidential: true,
+  };
+
+  it("帶 categoryIds：驗證存在 → transaction 含連結建立 → searchContent 併入分類名", async () => {
+    mocks.categoryFindMany.mockResolvedValue([{ id: "c1" }, { id: "c2" }]);
+    mocks.getCategoryNamePathsByIds.mockResolvedValue([["食物", "水果"], ["食物"]]);
+    await createRecord(
+      { ...baseInput, isConfidential: false, categoryIds: ["c1", "c2", "c1"] },
+      actor,
+    );
+    // 去重後驗證
+    expect(mocks.categoryFindMany).toHaveBeenCalledWith(
+      expect.objectContaining({ where: { id: { in: ["c1", "c2"] } } }),
+    );
+    // transaction 內含兩個連結 create
+    expect(mocks.recordCategoryCreate).toHaveBeenCalledTimes(2);
+    expect(mocks.recordCategoryCreate).toHaveBeenCalledWith(
+      expect.objectContaining({ data: expect.objectContaining({ categoryId: "c1" }) }),
+    );
+    // searchContent 併入分類名
+    const payload = mocks.recordCreate.mock.calls[0][0];
+    expect(payload.data.searchContent).toContain("水果");
+    expect(payload.data.searchContent).toContain("食物");
+  });
+
+  it("分類不存在 → BAD_REQUEST，不建立", async () => {
+    mocks.categoryFindMany.mockResolvedValue([{ id: "c1" }]); // 缺 c2
+    await expect(
+      createRecord(
+        { ...baseInput, isConfidential: false, categoryIds: ["c1", "c2"] },
+        actor,
+      ),
+    ).rejects.toMatchObject({ code: "BAD_REQUEST" });
+    expect(mocks.recordCreate).not.toHaveBeenCalled();
+  });
+
+  it("保密資料帶分類：連結建立但 searchContent 不寫", async () => {
+    mocks.categoryFindMany.mockResolvedValue([{ id: "c1" }]);
+    mocks.getCategoryNamePathsByIds.mockResolvedValue([["食物"]]);
+    await createRecord({ ...baseInput, categoryIds: ["c1"] }, actor);
+    expect(mocks.recordCategoryCreate).toHaveBeenCalledTimes(1);
     const payload = mocks.recordCreate.mock.calls[0][0];
     expect(payload.data).not.toHaveProperty("searchContent");
   });

@@ -68,7 +68,8 @@ export function RelationPicker({ fromId }: { fromId: string }) {
       </div>
 
       {open && debounced.length > 0 ? (
-        <ul className="absolute top-full z-10 mt-1 w-full rounded-md border border-zinc-200 bg-white shadow-lg dark:border-zinc-700 dark:bg-zinc-900">
+        // 文件流內展開（不用 absolute）：Card 有 overflow-hidden 會裁掉浮動選單
+        <ul className="mt-1 max-h-64 w-full overflow-y-auto rounded-md border border-zinc-200 bg-white shadow-lg dark:border-zinc-700 dark:bg-zinc-900">
           {search.isLoading ? (
             <li className="p-2 text-sm text-zinc-500">搜尋中…</li>
           ) : (search.data ?? []).length === 0 ? (

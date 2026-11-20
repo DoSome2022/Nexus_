@@ -35,3 +35,16 @@ export function canEdit(record: RecordPermissions, user: PermissionActor): boole
 export function canDelete(_record: RecordPermissions, user: PermissionActor): boolean {
   return user.role === "ADMIN";
 }
+
+/** 分類權限所需的 Category 欄位（TASK-012） */
+export interface CategoryPermissions {
+  createdById: string;
+}
+
+/** 分類管理（TASK-012）：作者或 ADMIN 可改/刪；所有登入者可讀 */
+export function canManageCategory(
+  category: CategoryPermissions,
+  user: PermissionActor,
+): boolean {
+  return user.role === "ADMIN" || category.createdById === user.id;
+}

@@ -50,6 +50,7 @@ export default async function EditRecordPage({
         isConfidential={record.isConfidential}
         template={dataMatches ? snapshot : null}
         templateMismatch={snapshot !== null && !dataMatches}
+        initialCategoryIds={record.categories.map((c) => c.id)}
       />
     </main>
   );

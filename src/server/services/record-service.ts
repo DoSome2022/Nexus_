@@ -22,6 +22,7 @@ import {
 } from "@/server/repositories/localdata-repository";
 import { logger } from "@/server/lib/logger";
 import { listRelationsForRecord, type RelationDTO } from "@/server/services/relation-service";
+import { getCategoryNamePathsByIds, listCategoryRefsForRecords, logRebuildFailure, rebuildRecordSearchContent } from "@/server/services/category-query";
 import type { CreateRecordInput, UpdateRecordInput } from "@/lib/schemas/record";
 import { templateFieldSchema } from "@/lib/schemas/template";
 import {
@@ -61,9 +62,18 @@ export interface RecordListItemDTO {
   updatedAt: Date;
 }
 
+/** 分類 ref（TASK-012）：path 為「食物 / 水果 / 橙」格式（含祖先） */
+export interface CategoryRefDTO {
+  id: string;
+  name: string;
+  path: string;
+}
+
 /** 搜尋結果 DTO（TASK-010）：snippet 為命中片段（withSnippet 時才有，經 canRead 過濾後產生） */
 export interface RecordSearchResultDTO extends RecordListItemDTO {
   snippet: string | null;
+  /** 分類 refs（TASK-012；withCategories=false 時為 []） */
+  categories: CategoryRefDTO[];
 }
 
 export interface RecordDetailDTO extends RecordListItemDTO {
@@ -75,6 +85,10 @@ export interface RecordDetailDTO extends RecordListItemDTO {
   canDelete: boolean;
   /** 資料關聯（TASK-007；另一端不可讀者已過濾） */
   relations: RelationDTO[];
+  /** 分類 refs（TASK-012；withCategories=false 時為 []） */
+  categories: CategoryRefDTO[];
+  /** 共享任一分類的其他可讀資料（排除自己，上限 20） */
+  categorySiblings: RecordListItemDTO[];
 }
 
 function toListItem(r: {
@@ -113,6 +127,23 @@ export async function createRecord(
     isConfidential: input.isConfidential,
   };
 
+  // TASK-012 後續：建立時的分類連結（去重、驗證存在）
+  const categoryIds = [...new Set(input.categoryIds ?? [])];
+  let categoryNames: string[] = [];
+  if (categoryIds.length > 0) {
+    const found = await getDb().category.findMany({
+      where: { id: { in: categoryIds } },
+      select: { id: true },
+    });
+    if (found.length !== categoryIds.length) {
+      throw new TRPCError({ code: "BAD_REQUEST", message: "所選分類不存在" });
+    }
+    categoryNames = (await getCategoryNamePathsByIds(categoryIds)).flat();
+  }
+  const linkCreates = categoryIds.map((categoryId) =>
+    getDb().recordCategory.create({ data: { recordId: id, categoryId } }),
+  );
+
   if (input.isConfidential) {
     // 保密：先寫檔 → DB metadata（data/schema null）→ DB 失敗刪檔回滾
     const nowIso = new Date().toISOString();
@@ -132,6 +163,7 @@ export async function createRecord(
         getDb().record.create({
           data: { ...commonData }, // 省略 schema/data → SQL NULL（null = 內容在 localdata）
         }),
+        ...linkCreates,
         getDb().operationLog.create({
           data: {
             actorId: actor.id,
@@ -147,12 +179,14 @@ export async function createRecord(
       throw err;
     }
   } else {
-    // TASK-010：非保密資料寫入內容索引文字（保密資料不寫 → DB NULL，CHECK 約束把關）
-    const searchContent = buildSearchContent(input.title, data) || null;
+    // TASK-010：非保密資料寫入內容索引文字（保密資料不寫 → DB NULL，CHECK 約束把關）；
+    // TASK-012 後續：分類 ancestor namePath 併入索引（搜「水果」可命中「橙」的資料）
+    const searchContent = buildSearchContent(input.title, data, categoryNames) || null;
     await getDb().$transaction([
       getDb().record.create({
         data: { ...commonData, schema: schema as unknown as InputJsonValue, data, searchContent },
       }),
+      ...linkCreates,
       getDb().operationLog.create({
         data: {
           actorId: actor.id,
@@ -221,6 +255,8 @@ interface SearchRow {
 export interface SearchOptions {
   /** 結果附命中片段（結果頁用；下拉建議不需 → 省成本） */
   withSnippet?: boolean;
+  /** 結果附分類路徑（結果頁用；熱路徑下拉不需 → 省 2 個查詢，TASK-012） */
+  withCategories?: boolean;
 }
 
 /** 合併排序用的候選列（DB 非保密 + 保密檔案掃描） */
@@ -267,6 +303,7 @@ export async function searchRecords(
   if (terms.length === 0) return [];
 
   const withSnippet = options.withSnippet === true;
+  const withCategories = options.withCategories === true;
   const likeOf = (term: string) => `%${escapeLikePattern(term)}%`;
 
   // Prisma.sql / Prisma.join 只組固定片段；term/pattern 一律參數化
@@ -350,19 +387,32 @@ export async function searchRecords(
       searchContent: withSnippet ? getDisplayText(r.searchContent) : null,
     }));
 
-  // 合併（SQL 已排除保密，Map 去重為防禦）→ 排序 → slice → 最後才做 snippet
+  // 合併（SQL 已排除保密，Map 去重為防禦）→ 排序 → slice → 最後才做 snippet / 分類 enrich
   const merged = new Map<string, SearchCandidate>();
   for (const c of [...dbCandidates, ...confidentialCandidates]) {
     if (!merged.has(c.row.id)) merged.set(c.row.id, c);
   }
   const sorted = [...merged.values()].sort(compareCandidates).slice(0, limit);
+  const refsByRecord = withCategories
+    ? await listCategoryRefsForRecords(sorted.map((c) => c.row.id))
+    : null;
   return sorted.map((c) => ({
     ...toListItem(c.row),
     snippet: withSnippet && c.searchContent ? makeSnippet(c.searchContent, terms) : null,
+    categories: (refsByRecord?.get(c.row.id) ?? []).map((r) => ({ id: r.id, name: r.name, path: r.path })),
   }));
 }
 
-export async function getRecord(id: string, actor: PermissionActor): Promise<RecordDetailDTO> {
+export interface GetRecordOptions {
+  /** 附分類 refs 與同分類資料（TASK-012；suggestRelations 等內部呼叫可關閉省查詢） */
+  withCategories?: boolean;
+}
+
+export async function getRecord(
+  id: string,
+  actor: PermissionActor,
+  options: GetRecordOptions = {},
+): Promise<RecordDetailDTO> {
   const record = await getDb().record.findUnique({
     where: { id },
     select: {
@@ -400,6 +450,38 @@ export async function getRecord(id: string, actor: PermissionActor): Promise<Rec
     }
   }
 
+  // TASK-012：分類 refs（含祖先 path）與同分類可讀資料
+  const withCategories = options.withCategories !== false;
+  let categories: CategoryRefDTO[] = [];
+  let categorySiblings: RecordListItemDTO[] = [];
+  if (withCategories) {
+    const refs = (await listCategoryRefsForRecords([record.id])).get(record.id) ?? [];
+    categories = refs.map((r) => ({ id: r.id, name: r.name, path: r.path }));
+    const categoryIds = refs.map((r) => r.id);
+    if (categoryIds.length > 0) {
+      const rows = await getDb().record.findMany({
+        where: {
+          id: { not: record.id },
+          deletedAt: null,
+          categories: { some: { categoryId: { in: categoryIds } } },
+          OR: [{ isPublic: true }, { authorId: actor.id }],
+        },
+        select: {
+          id: true,
+          title: true,
+          isPublic: true,
+          isEditableByOthers: true,
+          isConfidential: true,
+          authorId: true,
+          updatedAt: true,
+        },
+        orderBy: { updatedAt: "desc" },
+        take: 20,
+      });
+      categorySiblings = rows.filter((r) => canRead(r, actor)).map(toListItem);
+    }
+  }
+
   return {
     ...toListItem(record),
     schema,
@@ -408,6 +490,8 @@ export async function getRecord(id: string, actor: PermissionActor): Promise<Rec
     canEdit: canEdit(record, actor),
     canDelete: canDelete(record, actor),
     relations: await listRelationsForRecord(record.id, actor),
+    categories,
+    categorySiblings,
   };
 }
 
@@ -447,7 +531,8 @@ export async function suggestRelations(
   id: string,
   actor: PermissionActor,
 ): Promise<RelationSuggestionDTO[]> {
-  const record = await getRecord(id, actor);
+  // 建議不需分類資訊（省 2 個查詢；TASK-012）
+  const record = await getRecord(id, actor, { withCategories: false });
   const excludeIds = new Set([id, ...record.relations.map((r) => r.related.id)]);
   const candidates = await listReadableTitles(actor);
   return findTitleMentions(record.title, record.data, candidates, excludeIds);
@@ -557,6 +642,43 @@ export async function updateRecord(
   };
   const durationMs = () => Math.round(Date.now() - startedAt);
 
+  // TASK-012 後續：編輯表單「取代整組」分類連結（去重；與現況相同則不動作）
+  // 連結 ops 於 transaction 呼叫處內聯展開（保持 PrismaPromise 型別推斷）
+  let categoryReplace: { newIds: string[] } | null = null;
+  let nextCategoryNames: string[] | null = null;
+  if (input.categoryIds !== undefined) {
+    const newIds = [...new Set(input.categoryIds)];
+    const existing = await getDb().recordCategory.findMany({
+      where: { recordId: record.id },
+      select: { categoryId: true },
+    });
+    const oldIds = existing.map((l) => l.categoryId).sort();
+    const changed = JSON.stringify(oldIds) !== JSON.stringify([...newIds].sort());
+    if (changed) {
+      if (newIds.length > 0) {
+        const found = await getDb().category.findMany({
+          where: { id: { in: newIds } },
+          select: { id: true },
+        });
+        if (found.length !== newIds.length) {
+          throw new TRPCError({ code: "BAD_REQUEST", message: "所選分類不存在" });
+        }
+        nextCategoryNames = (await getCategoryNamePathsByIds(newIds)).flat();
+      }
+      categoryReplace = { newIds };
+    }
+  }
+  const categoryLogCreate = (targetId: string) =>
+    getDb().operationLog.create({
+      data: {
+        actorId: actor.id,
+        action: "UPDATE",
+        targetType: "RECORD_CATEGORY",
+        targetId,
+        durationMs: durationMs(),
+      },
+    });
+
   if (record.isConfidential) {
     // 舊值以檔案內容為準（DB data 為 NULL）
     const oldFile = await readRecordFile(record.id);
@@ -567,7 +689,7 @@ export async function updateRecord(
       { ...record, data: oldFile.data as JsonLike },
       input,
     );
-    if (diffs.length === 0) return { id: record.id };
+    if (diffs.length === 0 && !categoryReplace) return { id: record.id };
 
     const changes = diffs.map((d) => ({
       field: d.field,
@@ -582,10 +704,22 @@ export async function updateRecord(
       changes: [...oldFile.changes, ...changes],
       updatedAt: now.toISOString(),
     };
-    await updateRecordFile(newFile);
+    if (diffs.length > 0) {
+      await updateRecordFile(newFile);
+    }
     try {
       await getDb().$transaction([
-        getDb().record.update({ where: { id: record.id }, data: updates }),
+        ...(diffs.length > 0
+          ? [getDb().record.update({ where: { id: record.id }, data: updates })]
+          : []),
+        ...(categoryReplace
+          ? [
+              getDb().recordCategory.deleteMany({ where: { recordId: record.id } }),
+              ...categoryReplace.newIds.map((categoryId) =>
+                getDb().recordCategory.create({ data: { recordId: record.id, categoryId } }),
+              ),
+            ]
+          : []),
         getDb().operationLog.create({
           data: {
             actorId: actor.id,
@@ -595,10 +729,13 @@ export async function updateRecord(
             durationMs: durationMs(),
           },
         }),
+        ...(categoryReplace ? [categoryLogCreate(record.id)] : []),
       ]);
     } catch (err) {
       // 回滾：檔案寫回舊內容（不殘留半新狀態）
-      await updateRecordFile(oldFile);
+      if (diffs.length > 0) {
+        await updateRecordFile(oldFile);
+      }
       throw err;
     }
     return { id: record.id };
@@ -610,15 +747,28 @@ export async function updateRecord(
   }
   // TASK-010：標題/資料變更時重建內容索引文字（title 日期衍生詞也在 searchContent 內）；
   // legacy NULL 一併補值（derived 欄位不寫 ChangeLog）
+  // TASK-012：重建時併入目前分類的 namePath，避免編輯把分類名從索引洗掉；
+  //   分類整組取代時用新集合的 namePath
   const nextData = input.dataJson !== undefined ? JSON.parse(input.dataJson) : record.data;
   const rebuildSearch =
-    input.title !== undefined || input.dataJson !== undefined || record.searchContent === null;
+    input.title !== undefined ||
+    input.dataJson !== undefined ||
+    record.searchContent === null ||
+    categoryReplace !== null;
   const nextSearchContent = rebuildSearch
-    ? (buildSearchContent(input.title ?? record.title, nextData) || null)
+    ? (buildSearchContent(
+        input.title ?? record.title,
+        nextData,
+        categoryReplace
+          ? (nextCategoryNames ?? [])
+          : await listCategoryRefsForRecords([record.id]).then(
+              (refs) => (refs.get(record.id) ?? []).flatMap((r) => r.namePath),
+            ),
+      ) || null)
     : record.searchContent;
   const searchContentChanged = nextSearchContent !== record.searchContent;
   const diffs = diffRecordFields({ ...record, data: record.data as JsonLike }, input);
-  if (diffs.length === 0 && !searchContentChanged) return { id: record.id };
+  if (diffs.length === 0 && !searchContentChanged && !categoryReplace) return { id: record.id };
   await getDb().$transaction([
     getDb().record.update({
       where: { id: record.id },
@@ -640,6 +790,14 @@ export async function updateRecord(
         },
       }),
     ),
+    ...(categoryReplace
+      ? [
+          getDb().recordCategory.deleteMany({ where: { recordId: record.id } }),
+          ...categoryReplace.newIds.map((categoryId) =>
+            getDb().recordCategory.create({ data: { recordId: record.id, categoryId } }),
+          ),
+        ]
+      : []),
     getDb().operationLog.create({
       data: {
         actorId: actor.id,
@@ -649,6 +807,7 @@ export async function updateRecord(
         durationMs: durationMs(),
       },
     }),
+    ...(categoryReplace ? [categoryLogCreate(record.id)] : []),
   ]);
   return { id: record.id };
 }
@@ -792,6 +951,13 @@ export async function restoreRecord(
       } else {
         throw err;
       }
+    }
+  } else {
+    // TASK-012：非保密資料 restore 後重建 searchContent（垃圾桶期間分類可能已改名/移動）
+    try {
+      await rebuildRecordSearchContent([id]);
+    } catch (err) {
+      logRebuildFailure(`restore record ${id}`, err);
     }
   }
   return { id };

@@ -20,6 +20,12 @@ export default async function Home() {
         <span className="text-sm text-zinc-600 dark:text-zinc-400">
           {session.user.email} <Badge variant="secondary">{session.user.role}</Badge>
         </span>
+        <Link
+          href="/categories"
+          className="text-sm text-zinc-600 hover:text-zinc-900 dark:text-zinc-400 dark:hover:text-zinc-100"
+        >
+          分類
+        </Link>
         {session.user.role === "ADMIN" ? (
           <Link
             href="/templates"

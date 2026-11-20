@@ -8,6 +8,7 @@ import { DeleteRequestButton } from "@/components/delete-request-button";
 import { RelationDeleteButton } from "@/components/relation-delete-button";
 import { RelationPicker } from "@/components/relation-picker";
 import { RelationSuggestions } from "@/components/relation-suggestions";
+import { CategoryManager } from "@/components/category-manager";
 import { Badge } from "@/components/ui/badge";
 import { buttonVariants } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -82,6 +83,34 @@ export default async function RecordPage({
               </pre>
             </>
           )}
+
+          <section className="flex flex-col gap-2 border-t border-zinc-200 pt-4 dark:border-zinc-800">
+            <h2 className="text-sm font-medium">分類</h2>
+            <CategoryManager
+              recordId={record.id}
+              canManage={record.canEdit || session.user.role === "ADMIN"}
+              initialCategories={record.categories}
+            />
+          </section>
+
+          {record.categorySiblings.length > 0 ? (
+            <section className="flex flex-col gap-2 border-t border-zinc-200 pt-4 dark:border-zinc-800">
+              <h2 className="text-sm font-medium">同分類資料</h2>
+              <ul className="flex flex-col gap-1">
+                {record.categorySiblings.map((s) => (
+                  <li key={s.id} className="flex items-center justify-between gap-2 text-sm">
+                    <Link
+                      href={`/records/${s.id}`}
+                      className="break-all underline-offset-2 hover:underline"
+                    >
+                      {s.title}
+                    </Link>
+                    {s.isConfidential ? <Badge variant="destructive">保密</Badge> : null}
+                  </li>
+                ))}
+              </ul>
+            </section>
+          ) : null}
 
           <section className="flex flex-col gap-2 border-t border-zinc-200 pt-4 dark:border-zinc-800">
             <h2 className="text-sm font-medium">關聯資料</h2>

@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   canDelete,
   canEdit,
+  canManageCategory,
   canRead,
   type PermissionActor,
   type RecordPermissions,
@@ -70,5 +71,19 @@ describe("canDelete", () => {
     expect(canDelete(record(), admin)).toBe(true);
     expect(canDelete(record(), author)).toBe(false);
     expect(canDelete(record({ isConfidential: true }), author)).toBe(false);
+  });
+});
+
+describe("canManageCategory（TASK-012）", () => {
+  it("建立者可管理自己的分類", () => {
+    expect(canManageCategory({ createdById: author.id }, author)).toBe(true);
+  });
+
+  it("非建立者 USER 不可管理", () => {
+    expect(canManageCategory({ createdById: author.id }, other)).toBe(false);
+  });
+
+  it("ADMIN 可管理任何人的分類", () => {
+    expect(canManageCategory({ createdById: author.id }, admin)).toBe(true);
   });
 });

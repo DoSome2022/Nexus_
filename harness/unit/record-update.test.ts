@@ -21,11 +21,24 @@ const mocks = vi.hoisted(() => ({
   updateRecordFile: vi.fn(),
   moveToTrash: vi.fn(),
   restoreFromTrash: vi.fn(),
+  listCategoryRefs: vi.fn(),
+  rebuildRecordSearchContent: vi.fn(),
+  categoryFindMany: vi.fn(),
+  recordCategoryFindMany: vi.fn(),
+  recordCategoryDeleteMany: vi.fn(),
+  recordCategoryCreate: vi.fn(),
+  getCategoryNamePathsByIds: vi.fn(),
 }));
 
 vi.mock("@/server/db", () => ({
   getDb: () => ({
     record: { findUnique: mocks.findUnique, update: mocks.recordUpdate },
+    category: { findMany: mocks.categoryFindMany },
+    recordCategory: {
+      findMany: mocks.recordCategoryFindMany,
+      deleteMany: mocks.recordCategoryDeleteMany,
+      create: mocks.recordCategoryCreate,
+    },
     changeLog: { create: mocks.changeLogCreate },
     operationLog: { create: mocks.operationLogCreate },
     deletionRequest: {
@@ -35,6 +48,14 @@ vi.mock("@/server/db", () => ({
     },
     $transaction: mocks.transaction,
   }),
+}));
+
+// TASK-012：update/restore 只依賴 category-query 的分類 refs 與重建（內部邏輯另測）
+vi.mock("@/server/services/category-query", () => ({
+  listCategoryRefsForRecords: mocks.listCategoryRefs,
+  rebuildRecordSearchContent: mocks.rebuildRecordSearchContent,
+  logRebuildFailure: vi.fn(),
+  getCategoryNamePathsByIds: mocks.getCategoryNamePathsByIds,
 }));
 
 vi.mock("@/server/repositories/localdata-repository", () => ({
@@ -80,6 +101,13 @@ beforeEach(() => {
   mocks.transaction.mockImplementation(async (ops: unknown[]) => {
     for (const op of ops as Promise<unknown>[]) await op;
   });
+  mocks.listCategoryRefs.mockResolvedValue(new Map());
+  mocks.rebuildRecordSearchContent.mockResolvedValue(0);
+  mocks.categoryFindMany.mockResolvedValue([]);
+  mocks.recordCategoryFindMany.mockResolvedValue([]);
+  mocks.recordCategoryDeleteMany.mockResolvedValue({ count: 0 });
+  mocks.recordCategoryCreate.mockResolvedValue({ id: "link1" });
+  mocks.getCategoryNamePathsByIds.mockResolvedValue([]);
 });
 
 describe("diffRecordFields", () => {
@@ -210,6 +238,27 @@ describe("updateRecord（searchContent 重建，TASK-010）", () => {
     const updateArg = mocks.recordUpdate.mock.calls[0][0];
     expect(updateArg.data).not.toHaveProperty("searchContent");
   });
+
+  it("非保密：重建時併入目前分類 namePath（TASK-012，避免編輯洗掉分類名）", async () => {
+    mocks.findUnique.mockResolvedValue(dbRecord({ searchContent: null }));
+    mocks.listCategoryRefs.mockResolvedValue(
+      new Map([
+        ["r1", [{ id: "c1", name: "橙", path: "食物 / 水果 / 橙", namePath: ["食物", "水果", "橙"] }]],
+      ]),
+    );
+    await updateRecord({ id: "r1", title: "新標題" }, author);
+    const updateArg = mocks.recordUpdate.mock.calls[0][0];
+    expect(updateArg.data.searchContent).toContain("食物");
+    expect(updateArg.data.searchContent).toContain("水果");
+    expect(updateArg.data.searchContent).toContain("橙");
+  });
+
+  it("非保密：無分類時 searchContent 與舊版一致", async () => {
+    mocks.findUnique.mockResolvedValue(dbRecord({ searchContent: null }));
+    await updateRecord({ id: "r1", title: "新標題" }, author);
+    const updateArg = mocks.recordUpdate.mock.calls[0][0];
+    expect(updateArg.data.searchContent).toBe(buildSearchContent("新標題", { note: "舊內容" }));
+  });
 });
 
 describe("confirmDelete（token 驗證）", () => {
@@ -255,5 +304,85 @@ describe("restoreRecord", () => {
       data: { deletedAt: null },
     });
     expect(mocks.restoreFromTrash).toHaveBeenCalledWith("r1");
+    expect(mocks.rebuildRecordSearchContent).not.toHaveBeenCalled();
+  });
+
+  it("Admin 恢復非保密資料：rebuild searchContent（TASK-012）", async () => {
+    mocks.findUnique.mockResolvedValue({ id: "r1", isConfidential: false, deletedAt: new Date() });
+    await restoreRecord("r1", admin);
+    expect(mocks.rebuildRecordSearchContent).toHaveBeenCalledWith(["r1"]);
+  });
+});
+
+describe("updateRecord 分類取代（TASK-012 後續）", () => {
+  it("categoryIds 變更 → 取代整組連結 + searchContent 用新名稱 + RECORD_CATEGORY UPDATE log", async () => {
+    mocks.findUnique.mockResolvedValue(dbRecord({ searchContent: null }));
+    mocks.recordCategoryFindMany.mockResolvedValue([{ categoryId: "old1" }]);
+    mocks.categoryFindMany.mockResolvedValue([{ id: "new1" }, { id: "new2" }]);
+    mocks.getCategoryNamePathsByIds.mockResolvedValue([["食物", "水果"], ["食物"]]);
+    await updateRecord({ id: "r1", categoryIds: ["new1", "new2"] }, author);
+    expect(mocks.recordCategoryDeleteMany).toHaveBeenCalledWith({ where: { recordId: "r1" } });
+    expect(mocks.recordCategoryCreate).toHaveBeenCalledTimes(2);
+    const updateArg = mocks.recordUpdate.mock.calls[0][0];
+    expect(updateArg.data.searchContent).toContain("水果");
+    expect(mocks.operationLogCreate).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({
+          action: "UPDATE",
+          targetType: "RECORD_CATEGORY",
+          targetId: "r1",
+        }),
+      }),
+    );
+  });
+
+  it("categoryIds 與現況相同 → 不動作（無 deleteMany/create）", async () => {
+    mocks.findUnique.mockResolvedValue(dbRecord({ searchContent: "舊" }));
+    mocks.recordCategoryFindMany.mockResolvedValue([{ categoryId: "c1" }]);
+    await updateRecord({ id: "r1", categoryIds: ["c1"] }, author);
+    expect(mocks.recordCategoryDeleteMany).not.toHaveBeenCalled();
+    expect(mocks.recordCategoryCreate).not.toHaveBeenCalled();
+    expect(mocks.operationLogCreate).not.toHaveBeenCalled();
+  });
+
+  it("所選分類不存在 → BAD_REQUEST", async () => {
+    mocks.findUnique.mockResolvedValue(dbRecord({ searchContent: null }));
+    mocks.recordCategoryFindMany.mockResolvedValue([]);
+    mocks.categoryFindMany.mockResolvedValue([{ id: "c1" }]); // 缺 c2
+    await expect(
+      updateRecord({ id: "r1", categoryIds: ["c1", "c2"] }, author),
+    ).rejects.toMatchObject({ code: "BAD_REQUEST" });
+    expect(mocks.recordUpdate).not.toHaveBeenCalled();
+  });
+
+  it("只改分類（無其他欄位）→ 正常執行、清空分類也合法", async () => {
+    mocks.findUnique.mockResolvedValue(dbRecord({ searchContent: "含 舊分類 的索引" }));
+    mocks.recordCategoryFindMany.mockResolvedValue([{ categoryId: "c1" }]);
+    await updateRecord({ id: "r1", categoryIds: [] }, author);
+    expect(mocks.recordCategoryDeleteMany).toHaveBeenCalledWith({ where: { recordId: "r1" } });
+    expect(mocks.recordCategoryCreate).not.toHaveBeenCalled();
+    // searchContent 移除舊分類名
+    const updateArg = mocks.recordUpdate.mock.calls[0][0];
+    expect(updateArg.data.searchContent).not.toContain("舊分類");
+  });
+
+  it("保密資料分類取代：連結更新、不寫 searchContent", async () => {
+    mocks.findUnique.mockResolvedValue(dbRecord({ isConfidential: true, data: null }));
+    mocks.readRecordFile.mockResolvedValue({
+      version: 1 as const,
+      id: "r1",
+      authorId: "me",
+      schema: {},
+      data: { note: "舊內容" },
+      changes: [],
+      createdAt: "2026-10-13T00:00:00.000Z",
+      updatedAt: "2026-10-13T00:00:00.000Z",
+    });
+    mocks.recordCategoryFindMany.mockResolvedValue([]);
+    mocks.categoryFindMany.mockResolvedValue([{ id: "c1" }]);
+    await updateRecord({ id: "r1", categoryIds: ["c1"] }, author);
+    expect(mocks.recordCategoryCreate).toHaveBeenCalledTimes(1);
+    const updateArg = mocks.recordUpdate.mock.calls[0]?.[0];
+    expect(updateArg?.data ?? {}).not.toHaveProperty("searchContent");
   });
 });

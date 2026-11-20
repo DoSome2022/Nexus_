@@ -7,6 +7,7 @@ import { PrismaClient } from "../../src/generated/prisma/client";
 import type { InputJsonValue } from "../../src/generated/prisma/internal/prismaNamespace";
 import { buildRecordTemplateSnapshot } from "../../src/lib/template-data";
 import { buildSearchContent } from "../../src/lib/search-text";
+import { buildCategoryIndex, getCategoryNamePath } from "../../src/lib/category-tree";
 import type { TemplateField } from "../../src/lib/schemas/template";
 
 /**
@@ -64,6 +65,60 @@ const TEMPLATES = [
     ],
   },
 ] satisfies Array<{ id: string; name: string; description: string; fields: TemplateField[] }>;
+
+/** 分類樹（TASK-012）：食物 > 水果 > {橙, 蘋果, 香蕉}；食物 > {菜, 肉, 魚} */
+const CATEGORIES = [
+  { id: "seed_cat_food", name: "食物", parentId: null },
+  { id: "seed_cat_fruit", name: "水果", parentId: "seed_cat_food" },
+  { id: "seed_cat_orange", name: "橙", parentId: "seed_cat_fruit" },
+  { id: "seed_cat_apple", name: "蘋果", parentId: "seed_cat_fruit" },
+  { id: "seed_cat_banana", name: "香蕉", parentId: "seed_cat_fruit" },
+  { id: "seed_cat_veg", name: "菜", parentId: "seed_cat_food" },
+  { id: "seed_cat_meat", name: "肉", parentId: "seed_cat_food" },
+  { id: "seed_cat_fish", name: "魚", parentId: "seed_cat_food" },
+] satisfies Array<{ id: string; name: string; parentId: string | null }>;
+
+/** 分類示範資料（TASK-012）：公開/私有/保密各一，掛在分類節點上 */
+const CATEGORY_RECORDS = [
+  {
+    id: "seed_cat_orange_nutrition",
+    title: "橙的營養價值",
+    visibility: "PUBLIC" as const,
+    data: { note: "維他命 C 豐富，每日一顆" },
+    categoryIds: ["seed_cat_orange"],
+  },
+  {
+    id: "seed_cat_fruit_stock",
+    title: "水果庫存清單",
+    visibility: "PRIVATE" as const,
+    data: { items: ["橙", "蘋果", "香蕉"] },
+    categoryIds: ["seed_cat_fruit"],
+  },
+  {
+    id: "seed_cat_food_supplier",
+    title: "機密：食物供應商報價",
+    visibility: "CONFIDENTIAL" as const,
+    data: { vendor: "GreenFarm", quote: 12000 },
+    categoryIds: ["seed_cat_food"],
+  },
+];
+
+/** 既有資料補分類連結（TASK-012）：保密資料只 link 不寫索引 */
+const RECORD_CATEGORY_LINKS = [
+  { recordId: "seed_conf_002", categoryIds: ["seed_cat_food"] }, // 機密：合作廠商報價 → 食物
+];
+
+/** 分類 id → ancestor 名稱序列（供 buildSearchContent 的 categoryNames） */
+const CATEGORY_NAME_PATHS: Record<string, string[]> = {
+  seed_cat_food: ["食物"],
+  seed_cat_fruit: ["食物", "水果"],
+  seed_cat_orange: ["食物", "水果", "橙"],
+  seed_cat_apple: ["食物", "水果", "蘋果"],
+  seed_cat_banana: ["食物", "水果", "香蕉"],
+  seed_cat_veg: ["食物", "菜"],
+  seed_cat_meat: ["食物", "肉"],
+  seed_cat_fish: ["食物", "魚"],
+};
 
 /** 範本示範資料（TASK-008）：資料必須與範本欄位相符（schemaMatchesData） */
 const TEMPLATE_RECORDS = [
@@ -171,6 +226,101 @@ async function main() {
     console.log(`- 公開 ×${publicCount}、私有 ×${privateCount}、保密 ×${confidentialCount}（作者：${demo.email}）`);
     console.log(`- 驗證權限：admin 搜尋應只看得到 ${publicCount} 筆公開；demo 看得到全部 ${RECORDS.length} 筆`);
     console.log(`- 關聯建議示範（TASK-009）：檢視「甲君的某某網帳號」應建議 甲君 / 某某網`);
+
+    // 分類樹 + 示範資料（TASK-012；冪等）
+    let categoriesCreated = 0;
+    for (const c of CATEGORIES) {
+      const exists = await prisma.category.findUnique({ where: { id: c.id } });
+      if (exists) continue;
+      await prisma.category.create({
+        data: { id: c.id, name: c.name, parentId: c.parentId, createdById: demo.id },
+      });
+      categoriesCreated += 1;
+    }
+
+    let categoryRecordsCreated = 0;
+    for (const r of CATEGORY_RECORDS) {
+      const exists = await prisma.record.findUnique({ where: { id: r.id } });
+      if (exists) continue;
+      const isConfidential = r.visibility === "CONFIDENTIAL";
+      const categoryNames = r.categoryIds.flatMap((cid) => CATEGORY_NAME_PATHS[cid] ?? []);
+      await prisma.record.create({
+        data: {
+          id: r.id,
+          authorId: demo.id,
+          title: r.title,
+          ...(isConfidential
+            ? {}
+            : {
+                schema: {},
+                data: r.data,
+                // TASK-012：分類 ancestor namePath 併入索引（搜「水果」可命中橙的資料）
+                searchContent: buildSearchContent(r.title, r.data, categoryNames),
+              }),
+          isPublic: r.visibility === "PUBLIC",
+          isEditableByOthers: false,
+          isConfidential,
+        },
+      });
+      if (isConfidential) {
+        await fs.writeFile(
+          path.join(localdataDir, `${r.id}.json`),
+          JSON.stringify(
+            {
+              version: 1,
+              id: r.id,
+              authorId: demo.id,
+              schema: {},
+              data: r.data,
+              changes: [],
+              createdAt: new Date().toISOString(),
+              updatedAt: new Date().toISOString(),
+            },
+            null,
+            2,
+          ),
+          { mode: 0o600 },
+        );
+      }
+      for (const cid of r.categoryIds) {
+        await prisma.recordCategory.create({ data: { recordId: r.id, categoryId: cid } });
+      }
+      categoryRecordsCreated += 1;
+    }
+
+    // 既有資料補連結（冪等）；非保密連結後重建 searchContent（$executeRaw 不 bump updatedAt）
+    for (const link of RECORD_CATEGORY_LINKS) {
+      for (const cid of link.categoryIds) {
+        const exists = await prisma.recordCategory.findFirst({
+          where: { recordId: link.recordId, categoryId: cid },
+        });
+        if (!exists) {
+          await prisma.recordCategory.create({ data: { recordId: link.recordId, categoryId: cid } });
+        }
+      }
+      const rec = await prisma.record.findUnique({
+        where: { id: link.recordId },
+        select: { title: true, data: true, isConfidential: true },
+      });
+      if (rec && !rec.isConfidential) {
+        const links = await prisma.recordCategory.findMany({
+          where: { recordId: link.recordId },
+          select: { categoryId: true },
+        });
+        const allCategories = await prisma.category.findMany({
+          select: { id: true, name: true, parentId: true },
+        });
+        const index = buildCategoryIndex(allCategories);
+        const names = links.flatMap((l) => getCategoryNamePath(l.categoryId, index));
+        const next = buildSearchContent(rec.title, rec.data, names) || null;
+        await prisma.$executeRaw`UPDATE "Record" SET "searchContent" = ${next} WHERE "id" = ${link.recordId}`;
+      }
+    }
+    console.log(
+      `分類就緒：新增 ${categoriesCreated} 個分類（${CATEGORIES.length} 個總計），示範資料新增 ${categoryRecordsCreated} 筆`,
+    );
+    console.log(`- 分類樹：食物 > 水果 > {橙, 蘋果, 香蕉}；食物 > {菜, 肉, 魚}（/categories 可瀏覽）`);
+    console.log(`- 搜「水果」應命中「水果庫存清單」與「橙的營養價值」（分類名在索引內）`);
 
     // 範本 + 範本示範資料（TASK-008；admin 不存在則跳過）
     if (!admin) {

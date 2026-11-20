@@ -104,12 +104,23 @@ export function deriveDateTokens(text: string): string[] {
   return [...tokens];
 }
 
-/** 建 searchContent（顯示段 + SEP + 日期衍生詞）；兩者皆空回 "" */
-export function buildSearchContent(title: string, data: unknown): string {
+/**
+ * 建 searchContent（顯示段 + SEP + 日期衍生詞 + 分類路徑名）
+ * 分類名放 suffix 段（不進 snippet 顯示段）；無分類名時輸出與舊版完全一致（TASK-012）
+ */
+export function buildSearchContent(
+  title: string,
+  data: unknown,
+  categoryNames: readonly string[] = [],
+): string {
   const display = buildDisplayText(data);
   const tokens = new Set<string>();
   for (const t of deriveDateTokens(display)) tokens.add(t);
   for (const t of deriveDateTokens(title)) tokens.add(t);
+  for (const raw of categoryNames) {
+    const name = raw.replace(CONTROL_CHARS_RE, "").trim();
+    if (name !== "") tokens.add(name);
+  }
   const suffix = [...tokens].join(" ");
   if (display === "" && suffix === "") return "";
   return `${display}${SEARCH_CONTENT_SEPARATOR}${suffix}`;

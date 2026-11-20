@@ -26,6 +26,7 @@ model User {
   deletedAt           DateTime?
   records             Record[]
   recordTemplates     RecordTemplate[]
+  categories          Category[]
   operationLogs       OperationLog[]
   changeLogs          ChangeLog[]
   passwordResetTokens PasswordResetToken[]
@@ -54,6 +55,7 @@ model Record {
 
   relationsFrom    RecordRelation[]  @relation("from")
   relationsTo      RecordRelation[]  @relation("to")
+  categories       RecordCategory[]
   deletionRequests DeletionRequest[]
 
   @@index([authorId])
@@ -92,6 +94,38 @@ model RecordRelation {
 
   @@index([fromId])
   @@index([toId])
+}
+
+// 資料分類樹（TASK-012）：多層自關聯（parentId），人人可建、全站可見
+// name 無 DB unique：per-parent 重複由 service 檢查（Prisma 不支援 NULLS NOT DISTINCT，
+// DB unique 擋不到根層同名；見 TASK-012 文件）
+model Category {
+  id          String   @id @default(cuid())
+  name        String
+  parentId    String?
+  parent      Category?  @relation("CategoryTree", fields: [parentId], references: [id], onDelete: Restrict)
+  children    Category[] @relation("CategoryTree")
+  createdById String
+  createdBy   User     @relation(fields: [createdById], references: [id], onDelete: Restrict)
+  records     RecordCategory[]
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@index([parentId])
+  @@index([createdById])
+}
+
+// Record ↔ Category 多對多（TASK-012）；重複連結由 DB unique + service 雙重阻擋
+model RecordCategory {
+  id         String   @id @default(cuid())
+  recordId   String
+  categoryId String
+  record     Record   @relation(fields: [recordId], references: [id], onDelete: Cascade)
+  category   Category @relation(fields: [categoryId], references: [id], onDelete: Restrict)
+  createdAt  DateTime @default(now())
+
+  @@unique([recordId, categoryId])
+  @@index([categoryId])
 }
 
 model OperationLog {

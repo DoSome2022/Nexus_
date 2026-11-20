@@ -82,6 +82,31 @@ describe("buildSearchContent / getDisplayText", () => {
     expect(buildSearchContent("標題", { a: "內容" })).toBe(`內容${SEARCH_CONTENT_SEPARATOR}`);
     expect(buildSearchContent("標題", {})).toBe("");
   });
+
+  it("分類名進入 suffix 段（TASK-012）：顯示段不變、snippet 不會出現分類名", () => {
+    const sc = buildSearchContent("橙的營養", { note: "維他命 C" }, ["食物", "水果", "橙"]);
+    expect(getDisplayText(sc)).toBe("維他命 C");
+    expect(sc).toContain("食物");
+    expect(sc).toContain("水果");
+    expect(sc).toContain("橙");
+  });
+
+  it("無分類名時輸出與舊版完全一致（byte-for-byte 相容）", () => {
+    expect(buildSearchContent("標題", { a: "內容" })).toBe(
+      buildSearchContent("標題", { a: "內容" }, []),
+    );
+  });
+
+  it("只有分類名、data 為空 → 回非空字串、顯示段為空", () => {
+    const sc = buildSearchContent("標題", {}, ["水果"]);
+    expect(sc).toBe(`${SEARCH_CONTENT_SEPARATOR}水果`);
+    expect(getDisplayText(sc)).toBe("");
+  });
+
+  it("分類名剝控制字元、trim、去重", () => {
+    const sc = buildSearchContent("標題", {}, [" 水果 ", "水果", "食物"]);
+    expect(sc).toBe(`${SEARCH_CONTENT_SEPARATOR}水果 食物`);
+  });
 });
 
 describe("tokenizeQuery", () => {

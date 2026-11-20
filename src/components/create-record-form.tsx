@@ -10,6 +10,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { Input } from "@/components/ui/input";
 import { TemplateSelect } from "@/components/template-select";
 import { RecordDataFields } from "@/components/record-data-fields";
+import { CategoryPicker } from "@/components/category-picker";
 import {
   buildRecordFormSchema,
   serializeTemplateValues,
@@ -17,14 +18,16 @@ import {
 } from "@/lib/template-data";
 
 /**
- * 建立資料表單（TASK-003 / TASK-004 / TASK-008）
+ * 建立資料表單（TASK-003 / TASK-004 / TASK-008 / TASK-012 後續）
  * 可見性三選項（保密時「允許他人編輯」停用並強制為否）
  * 選範本 → 依範本欄位填表（非工程師友善）；「無範本」→ 自由 JSON textarea
+ * 分類多選（建立時直接掛上；亦可在檢視頁再調整）
  */
 export function CreateRecordForm() {
   const router = useRouter();
   const { data: templates = [] } = trpc.template.list.useQuery();
   const [templateId, setTemplateId] = useState("");
+  const [categoryIds, setCategoryIds] = useState<string[]>([]);
   const template = templates.find((t) => t.id === templateId) ?? null;
 
   const createMutation = trpc.record.create.useMutation({
@@ -69,6 +72,7 @@ export function CreateRecordForm() {
         values.visibility === "CONFIDENTIAL" ? false : values.isEditableByOthers,
       ...flags,
       templateId: template?.id,
+      categoryIds,
     });
   }
 
@@ -149,6 +153,11 @@ export function CreateRecordForm() {
               />
               允許他人編輯{visibility === "CONFIDENTIAL" ? "（保密資料不可選）" : ""}
             </label>
+
+            <div className="flex flex-col gap-2">
+              <label className="text-sm font-medium">分類（可多選）</label>
+              <CategoryPicker value={categoryIds} onChange={setCategoryIds} />
+            </div>
 
             {createMutation.error ? (
               <p role="alert" className="text-sm text-red-600">

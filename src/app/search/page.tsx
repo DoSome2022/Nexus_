@@ -33,7 +33,10 @@ export default async function SearchPage({
   });
 
   // TASK-010：withSnippet 取命中片段（含保密資料內容片段，經 canRead 過濾）
-  const results = q ? await caller.record.search({ q, withSnippet: true }) : [];
+  // TASK-012：withCategories 附分類路徑（結果頁顯示用）
+  const results = q
+    ? await caller.record.search({ q, withSnippet: true, withCategories: true })
+    : [];
   const terms = q ? tokenizeQuery(q) : [];
 
   return (
@@ -70,6 +73,12 @@ export default async function SearchPage({
                           )}
                         </span>
                       </span>
+                      {r.categories.length > 0 ? (
+                        // 分類路徑（TASK-012）：純文字（整張卡已是 Link，不可巢狀連結）
+                        <span className="text-xs text-zinc-500 dark:text-zinc-400">
+                          {r.categories.map((c) => c.path).join("、")}
+                        </span>
+                      ) : null}
                       {r.snippet ? (
                         <span className="line-clamp-2 text-sm text-zinc-600 dark:text-zinc-400">
                           <HighlightSnippet text={r.snippet} terms={terms} />
